@@ -55,7 +55,7 @@ def main():
         logger.info("Cleaning existing compile folder...")
         for item in compile_root.iterdir():
             try:
-                send2trash(item)
+                send2trash.send2trash(item)
                 logger.info(f"Sent to Recycle Bin: {item}")
             except Exception as e:
                 logger.warn(f"Failed to remove {item}: {e}")
