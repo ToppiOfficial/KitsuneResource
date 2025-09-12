@@ -71,20 +71,12 @@ class PrefixedLogger:
     def debug(self, msg):
         self.logger.debug(f"{self.prefix} {msg}")
 
-def safe_path(path):
-    """Convert to Path object and resolve."""
-    return Path(path).resolve()
-
-def rel_path(path, base=None):
-    """Return path relative to base if possible."""
-    path = safe_path(path)
-    if base:
-        base = safe_path(base)
-        try:
-            return path.relative_to(base)
-        except ValueError:
-            pass
-    return path
+def resolve_json_path(json_path, config_file):
+    """Resolve a path from JSON relative to the JSON file folder."""
+    p = Path(json_path.lstrip("/\\"))  # remove leading slash to avoid root
+    if not p.is_absolute():
+        p = Path(config_file).parent / p
+    return p.resolve()
 
 def format_file_count(count):
     """Nice formatting for counts."""

@@ -1,10 +1,11 @@
 import argparse, shutil, time, send2trash
 from pathlib import Path
-from utils import Logger, parse_config_json, print_header, PrefixedLogger
+from utils import Logger, parse_config_json, print_header, PrefixedLogger, resolve_json_path
 from compilers import materials
 from compilers.model import model_compile_studiomdl
 from compilers.gameinfo import get_game_search_paths
 from compilers.vpk import package_vpk
+from compilers.image import convert_image
 
 COMPILE_ROOT = 'Resources-Compiled'
 
@@ -149,10 +150,8 @@ def main():
         for subitem in model_data.get("subdata", []):
             mat_logger = PrefixedLogger(logger, "MATERIAL")
             subdata_logger = PrefixedLogger(logger, "DATA")
-            input_path = Path(subitem.get("input"))
-            if not input_path.is_absolute():
-                input_path = Path(args.config).parent / input_path
-            input_path = input_path.resolve()
+            input_path = resolve_json_path(subitem.get("input"), args.config)
+
 
             export_path = output_dir / Path(subitem.get("output"))
             export_path.parent.mkdir(parents=True, exist_ok=True)
@@ -173,6 +172,7 @@ def main():
             # ---- VTF EXPORT OR COPY ----
             vtf_data = subitem.get("vtf")
             if vtf_data and vtfcmd_exe:
+                # Export as VTF
                 try:
                     materials.export_vtf(
                         src_path=input_path,
@@ -186,11 +186,16 @@ def main():
                 except Exception as e:
                     subdata_logger.error(f"Failed to export VTF: {input_path.name} -> {export_path.name} | {e}")
             else:
+                # Convert to image format if needed, otherwise copy
                 try:
-                    shutil.copy2(input_path, export_path)
-                    subdata_logger.info(f"Copied subdata: {input_path.name} -> {export_path.name}")
+                    converted = convert_image(input_path, export_path)
+                    if converted:
+                        subdata_logger.info(f"Converted image: {input_path.name} -> {export_path.name}")
+                    else:
+                        shutil.copy2(input_path, export_path)
+                        subdata_logger.info(f"Copied file: {input_path.name} -> {export_path.name}")
                 except Exception as e:
-                    subdata_logger.error(f"Failed to copy subdata: {input_path.name} -> {export_path.name} | {e}")
+                    subdata_logger.error(f"Failed to copy/convert subdata: {input_path.name} -> {export_path.name} | {e}")
 
 
     # ==== MATERIAL-ONLY EXPORT ====
@@ -222,11 +227,7 @@ def main():
         export_base.mkdir(parents=True, exist_ok=True)
 
         for item in items:
-            input_path = Path(item.get("input"))
-            if not input_path.is_absolute():
-                input_path = Path(args.config).parent / input_path
-            input_path = input_path.resolve()
-
+            input_path = resolve_json_path(item.get("input"), args.config)
             export_path = export_base / Path(item.get("output"))
             export_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -243,7 +244,7 @@ def main():
                 except Exception as e:
                     data_logger.error(f"Failed string replace: {input_path.name} -> {export_path.name} | {e}")
 
-            # ---- VTF EXPORT OR COPY ----
+            # ---- VTF EXPORT OR IMAGE CONVERSION / COPY ----
             vtf_data = item.get("vtf")
             if vtf_data and vtfcmd_exe:
                 try:
@@ -259,11 +260,16 @@ def main():
                 except Exception as e:
                     data_logger.error(f"Failed VTF export: {input_path.name} -> {export_path.name} | {e}")
             else:
+                # Convert image if needed, else copy
                 try:
-                    shutil.copy2(input_path, export_path)
-                    data_logger.info(f"Copied file: {input_path.name} -> {export_path.name}")
+                    converted = convert_image(input_path, export_path)
+                    if converted:
+                        data_logger.info(f"Converted image: {input_path.name} -> {export_path.name}")
+                    else:
+                        shutil.copy2(input_path, export_path)
+                        data_logger.info(f"Copied file: {input_path.name} -> {export_path.name}")
                 except Exception as e:
-                    data_logger.error(f"Failed to copy: {input_path.name} -> {export_path.name} | {e}")
+                    data_logger.error(f"Failed to copy/convert: {input_path.name} -> {export_path.name} | {e}")
 
                         
     vpk_exe = Path(config.get("vpk")).resolve() if config.get("vpk") else None
