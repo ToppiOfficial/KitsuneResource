@@ -46,29 +46,53 @@ pip install -r requirements.txt
 ## Sample JSON
 ```json
 {
-  "studiomdl": "D:/SteamLibrary/steamapps/common/Left 4 Dead 2/bin/nekomdl.exe",
-  "gameinfo": "D:/SteamLibrary/steamapps/common/Left 4 Dead 2/left4dead2/gameinfo.txt",
-  "vtfcmd": "D:/Tools/VTFCmd.exe",
-  "vpk": "D:/SteamLibrary/steamapps/common/Left 4 Dead 2/bin/vpk.exe",
-  "model": {
-    "human_01": {
-      "qc": "models/human_01.qc",
-      "submodels": { "arms": "arms.qc" },
-      "subdata": [
-        { "input": "scripts/addoninfo.txt", "output": "addoninfo.txt" },
-        { "input": "materials/Lobby.psd", "output": "materials/vgui/select_francis.vtf",
-          "vtf": { "flags": ["NOMIP", "NOLOD"], "encoder_args": ["-format", "DXT1"] } }
-      ]
+    "studiomdl": "D:/SteamLibrary/steamapps/common/Left 4 Dead 2/bin/nekomdl.exe",
+    "gameinfo": "D:/SteamLibrary/steamapps/common/Left 4 Dead 2/left4dead2/gameinfo.txt",
+    "vtfcmd": "D:/Portable Program Files/VTFeditReloaded/VTFCmd.exe",
+    "vpk": "D:/SteamLibrary/steamapps/common/Left 4 Dead 2/bin/vpk.exe",
+
+    "model": {
+        "human_01": {
+            "qc": "D:/SteamLibrary/steamcontents/characters/toppi/l4d2/hsr/asta_def/tools_preview.qc",
+            "submodels": {
+                "anims": "biker_arms.qc"
+            },
+            "subdata": [
+                {
+                    "input": "D:/SteamLibrary/steamcontents/characters/toppi/l4d2/hsr/asta_def/scripts/addoninfo.txt",
+                    "output": "addoninfo.txt",
+                    "replace": {
+                        "$CHARA$": "human_01"
+                    }
+                },
+                {
+                    "input": "D:/SteamLibrary/steamcontents/characters/toppi/l4d2/hsr/asta_def/materials/Lobby.psd",
+                    "output": "materials/vgui/select_francis.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT1", "-nomipmaps"]
+                    }
+                }
+            ]
+        }
+    },
+
+    "material": {
+        "test_materials": {
+            "materials": [
+                "D:/SteamLibrary/steamapps/common/Left 4 Dead 2/left4dead2_workshop/materials/models/characters/toppi/hsr/march7th_def/cloth2.vmt"
+            ]
+        }
+    },
+
+    "data": {
+        "AssetShared": [
+            {
+                "input": "D:/SteamLibrary/steamcontents/characters/toppi/l4d2/hsr/asta_def/scripts/addoninfo.txt",
+                "output": "addoninfo.txt"
+            }
+        ]
     }
-  },
-  "material": {
-    "shared": { "materials": ["materials/common.vmt"] }
-  },
-  "data": {
-    "AssetShared": [
-      { "input": "scripts/addoninfo.txt", "output": "addoninfo.txt" }
-    ]
-  }
 }
 ```
 ## Run
