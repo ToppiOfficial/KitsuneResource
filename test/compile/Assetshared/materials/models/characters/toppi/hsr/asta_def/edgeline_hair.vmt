@@ -1,0 +1,16 @@
+vertexlitgeneric
+{
+    $basetexture "vgui/white"
+    $color2 "[0.318 0.051 0.106]"
+
+    $bumpmap "dev/flat_normal"
+    $phong 1
+    $phongboost 0
+    $phongfresnelranges "[0 0.5 1]"
+    $phongexponent 5
+    $halflambert 1
+
+    $lightwarptexture "models/characters/toppi/hsr/asta_def/shared/toon_warp_0"
+
+    $nodecal 1
+}

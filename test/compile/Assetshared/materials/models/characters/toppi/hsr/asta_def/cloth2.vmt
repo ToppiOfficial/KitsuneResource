@@ -1,0 +1,18 @@
+patch
+{
+    include "materials/models/survivors/survivors_it_shared.vmt"
+    insert
+    {
+        $basetexture "models/characters/toppi/hsr/asta_def/cloth2_d"
+        $lightwarptexture "models/characters/toppi/hsr/asta_def/shared/toon_warp_45"
+
+        $bumpmap "dev/flat_normal"
+        $phong 1
+        $phongboost 0
+        $phongfresnelranges "[0 0.5 1]"
+        $phongexponent 5
+        $halflambert 1
+
+        $nodecal 1
+    }
+}

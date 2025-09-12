@@ -1,0 +1,17 @@
+EyeRefract
+{
+	$iris "models/characters/toppi/hsr/asta_def/eye_d"
+	$CorneaTexture "dev\flat_normal"
+	$ambientoccltexture "vgui/white"
+	$envmap "vgui/black"
+	$lightwarptexture "models/characters/toppi/hsr/asta_def/shared/toon_warp_0"
+	
+	$halflambert 1
+	$nodecal 1
+	$parallaxStrength 0
+    $dilation 0.55
+	$corneaBumpStrength 0
+	$raytraceSphere 0
+	$sphereTexkillCombo 0
+	$glossiness 0
+}
