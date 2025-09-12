@@ -1,4 +1,4 @@
-import argparse, shutil, time
+import argparse, shutil, time, send2trash
 from pathlib import Path
 from utils import Logger, parse_config_json, print_header, PrefixedLogger
 from compilers import materials
@@ -6,6 +6,7 @@ from compilers.model import model_compile_studiomdl
 from compilers.gameinfo import get_game_search_paths
 from compilers.vpk import package_vpk
 
+COMPILE_ROOT = 'Resources-Compiled'
 
 def main():
     start_time = time.time()
@@ -47,6 +48,17 @@ def main():
         logger.info(f"\t{p}")
 
     localize = not args.nolocalize
+    
+    # ==== CLEAN COMPILE FOLDER ====
+    compile_root = Path(COMPILE_ROOT)
+    if compile_root.exists() and any(compile_root.iterdir()):
+        logger.info("Cleaning existing compile folder...")
+        for item in compile_root.iterdir():
+            try:
+                send2trash(item)
+                logger.info(f"Sent to Recycle Bin: {item}")
+            except Exception as e:
+                logger.warn(f"Failed to remove {item}: {e}")
 
     # ==== VTF CMD ====
     vtfcmd_path = config.get("vtfcmd")
@@ -58,12 +70,19 @@ def main():
     # ==== COMPILE MODELS ====
     for model_name, model_data in models.items():
         model_logger = PrefixedLogger(logger, "MODEL")
+
+        # Default to True if "compile" not specified
+        compile_model = model_data.get('compile', True)
+        if not compile_model:
+            model_logger.warn(f"Skipping model {model_name} because compile=false.")
+            continue  # skip this model entirely
+
         qc_path = Path(model_data.get("qc")).resolve()
         if not qc_path.exists():
             model_logger.error(f"QC file not found: {qc_path}")
             continue
 
-        output_dir = Path("compile") / model_name
+        output_dir = Path(COMPILE_ROOT) / model_name
         output_dir.mkdir(parents=True, exist_ok=True)
         model_logger.info(f"Compiling model {qc_path.name}")
 
@@ -111,7 +130,7 @@ def main():
 
         # Material copy
         if not args.nomaterial:
-            copy_target = Path("compile/Assetshared") if args.sharedmaterials else output_dir
+            copy_target = Path(f"{COMPILE_ROOT}/Assetshared") if args.sharedmaterials else output_dir
             copy_target.mkdir(parents=True, exist_ok=True)
             model_logger.info(f"Copying {len(dumped_materials)} materials to {copy_target}...")
             material_to_vmt = materials.map_materials_to_vmt(dumped_materials, search_paths)
@@ -181,8 +200,10 @@ def main():
         if not vmt_list:
             mat_logger.warn("No materials listed — skipping.")
             continue
+        
+        mat_logger.info(f'[{set_name}]')
 
-        output_dir = Path("compile") / set_name
+        output_dir = Path(COMPILE_ROOT) / set_name
         output_dir.mkdir(parents=True, exist_ok=True)
         material_to_vmt = {Path(vmt): Path(vmt) for vmt in vmt_list}
         copied_files = materials.copy_materials(
@@ -197,7 +218,7 @@ def main():
     # ---- TOP-LEVEL DATA ----
     for folder_name, items in config.get("data", {}).items():
         data_logger = PrefixedLogger(logger, "DATA")
-        export_base = Path("compile") / folder_name
+        export_base = Path(COMPILE_ROOT) / folder_name
         export_base.mkdir(parents=True, exist_ok=True)
 
         for item in items:
@@ -251,7 +272,7 @@ def main():
         args.vpk = False
 
     if args.vpk and vpk_exe:
-        compile_root = Path("compile")
+        compile_root = Path(COMPILE_ROOT)
         for subfolder in compile_root.iterdir():
             if subfolder.is_dir():
                 package_vpk(vpk_exe, subfolder, logger)
