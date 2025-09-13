@@ -5,7 +5,7 @@ from datetime import datetime
 
 class Logger:
     """
-    Simple logger with levels and optional color output.
+    Simple logger with levels, optional color output, and optional file logging.
     """
     LEVELS = {"INFO": 1, "WARN": 2, "ERROR": 3, "DEBUG": 4}
 
@@ -17,9 +17,19 @@ class Logger:
         "RESET": "\033[0m"
     }
 
-    def __init__(self, verbose=False, use_color=True):
+    def __init__(self, verbose=False, use_color=True, log_file=None):
         self.verbose = verbose
         self.use_color = use_color
+        self.log_file = log_file  # Path or None
+
+    def _write_to_file(self, text):
+        if self.log_file:
+            try:
+                with self.log_file.open("a", encoding="utf-8") as f:
+                    f.write(text + "\n")
+            except Exception:
+                # Fail silently on logging errors to avoid crashing main program
+                pass
 
     def _print(self, level, message):
         if level == "DEBUG" and not self.verbose:
@@ -28,19 +38,14 @@ class Logger:
         if self.use_color and level in self.COLOR:
             prefix = f"{self.COLOR[level]}{prefix}{self.COLOR['RESET']}"
         timestamp = datetime.now().strftime("%H:%M:%S")
-        print(f"{timestamp} {prefix} {message}")
+        line = f"{timestamp} {prefix} {message}"
+        print(line)
+        self._write_to_file(line)
 
-    def info(self, message):
-        self._print("INFO", message)
-
-    def warn(self, message):
-        self._print("WARN", message)
-
-    def error(self, message):
-        self._print("ERROR", message,)
-
-    def debug(self, message):
-        self._print("DEBUG", message)
+    def info(self, message):  self._print("INFO", message)
+    def warn(self, message):  self._print("WARN", message)
+    def error(self, message): self._print("ERROR", message)
+    def debug(self, message): self._print("DEBUG", message)
         
 class PrefixedLogger:
     """Logger wrapper to prepend a colored context prefix."""
@@ -96,6 +101,13 @@ def relative_to_base(base_file: str | Path, *subpaths: str) -> Path:
     """
     base_folder = Path(base_file).parent.resolve()
     return base_folder.joinpath(*subpaths).resolve()
+
+def rel_path(path: Path, base: Path) -> Path:
+    """Return path relative to base, fallback to absolute if not possible."""
+    try:
+        return path.relative_to(base)
+    except ValueError:
+        return path
 
 def parse_config_json(config_path):
     config_path = Path(config_path).resolve()

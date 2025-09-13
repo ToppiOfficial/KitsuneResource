@@ -3,18 +3,35 @@ import re
 import shutil
 from collections import Counter
 import subprocess
+from PIL import Image
+from tempfile import NamedTemporaryFile
+
 
 # Commands in VMT that reference textures
-TEXTURE_KEYS = [
+TEXTURE_KEYS = {
     "$basetexture",
+    "$basetexture2",
     "$bumpmap",
     "$lightwarptexture",
-    "$phongexponentexture",
+    "$phongexponenttexture",
     "$normalmap",
     "$emissiveblendbasetexture",
     "$emissiveblendtexture",
     "$emissiveblendflowtexture",
-]
+    "$ssbump",
+    "$envmapmask",
+    "$detail",
+    "$detail2",
+    "$blendmodulatetexture",
+    "$AmbientOcclTexture",
+    "$CorneaTexture",
+    "$Envmap",
+    "$phongwarptexture",
+    "$selfillummask",
+    "$selfillumtexture",
+    "$detail1",
+    "$iris",
+}
 
 def find_material_vmt(material_name: str, search_paths: list[Path]) -> Path | None:
     """
@@ -45,37 +62,38 @@ def map_materials_to_vmt(materials_list: list[str], search_paths: list[Path]) ->
             result[mat] = vmt
     return result
 
-def parse_vmt_textures(vmt_path: Path) -> dict[str, str]:
+def parse_vmt_textures(vmt_path: Path) -> dict[str, Path]:
     """
-    Parse a VMT file and extract all texture references.
+    Parse a VMT file and extract all texture references (case-insensitive).
 
     Args:
         vmt_path: Path to the VMT file.
 
     Returns:
-        Dict mapping VMT command -> referenced texture path (as string)
+        Dict mapping VMT command -> referenced texture path (as Path)
     """
     textures = {}
     if not vmt_path.exists():
         return textures
 
+    # Lowercase keys for case-insensitive matching
+    lowercase_keys = {k.lower() for k in TEXTURE_KEYS}
+
     with open(vmt_path, "r", encoding="utf-8") as f:
         for line in f:
             line = line.strip()
-            # Match lines like: $basetexture "models/characters/toppi/hsr/asta_def/cloth1_d"
-            match = re.match(r'(\$\w+)\s+"([^"]+)"', line)
+            if line.startswith("//"):
+                continue  # skip commented lines
+
+            match = re.match(r'(\$\w+)\s+"([^"]+)"', line, flags=re.IGNORECASE)
             if match:
                 key, value = match.groups()
-                key = key.lower()
-                if key in TEXTURE_KEYS:
-                    textures[key] = value.replace("\\", "/")
+                key_lower = key.lower()
+                if key_lower in lowercase_keys:
+                    # Normalize path and store as Path
+                    textures[key_lower] = Path(value.replace("\\", "/"))
 
     return textures
-
-TEXTURE_KEYS = {
-    "$basetexture", "$bumpmap", "$normalmap", "$envmapmask",
-    "$detail", "$selfillummask", "$lightwarptexture"
-}
 
 def copy_materials(
     material_to_vmt: dict[str, Path],
@@ -149,6 +167,8 @@ def copy_materials(
         # Read lines exactly as-is to preserve spacing
         with open(vmt_path, "r", encoding="utf-8", errors="ignore") as f:
             lines = f.readlines()
+            
+        textures = parse_vmt_textures(vmt_path)
 
         new_lines = []
         for line in lines:
@@ -168,18 +188,16 @@ def copy_materials(
                         break
 
             # Texture match
-            tex_match = re.match(r'(\$\w+)\s+"([^"]+)"', stripped)
-            if tex_match:
-                key, tex_rel_path = tex_match.groups()
-                key = key.lower()
-                if key in TEXTURE_KEYS:
-                    tex_rel = Path(tex_rel_path.replace("\\", "/"))
+            for key, tex_rel in textures.items():
+            # Check if this line contains the key
+                if key in stripped.lower():
                     tex_file = None
                     for root in search_paths:
                         candidate = (root / "materials" / tex_rel).with_suffix(".vtf")
                         if candidate.exists():
                             tex_file = candidate
                             break
+
                     if tex_file:
                         dest_rel_tex = localize_path(tex_file)
                         dest_tex = export_dir / dest_rel_tex
