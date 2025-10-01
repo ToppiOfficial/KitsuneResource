@@ -1,0 +1,14 @@
+{
+    "header": "ValveTexture",
+    "vtfcmd": "D:/Portable Program Files/VTFeditReloaded/VTFCmd.exe",
+    "include" : "D:/Local-runtimes/Source_ResourceCompiler/sample_json/resource_compiler_textures.json",
+    "vtf": {
+        "normal": {
+            "input": ".*_n\\.(psd|png|tga|jpg|dds)$",
+            "vtf": {
+                "flags": ["NORMAL"],
+                "encoder_args": ["-format", "BGR888", "-alphaformat", "BGRA8888"]
+            }
+        }
+    }
+}

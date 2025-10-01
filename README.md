@@ -1,14 +1,18 @@
-# Source Resource Compiler
+# KitsuneResource
 
-A Python-based **pipeline for compiling, managing, and packaging Source engine resources** (models, materials, scripts, and more). Designed for games like **Left 4 Dead 2**, this tool automates compilation, material processing, subdata export, and optional VPK packaging.  
+A Python-based **pipeline for compiling, and packaging Source engine resources** (models, materials, scripts, etc). Designed for games like **Left 4 Dead 2 or Garry's Mod**, this tool automates compilation, material processing, subdata export, and optional VPK packaging.  
+
+## Compatibility
+
+Windows & Python 3.10+
 
 ## Features
 
-- **Model Compilation**
-  - Compile main QC and sub-QC files using a custom StudioMDL executable.
-  - Supports multiple models per project.
+- **Model Compiling**
+  - Compile main QC and sub-QC files using a specified StudioMDL executable.
+  - Supports multiple models per JSON.
 
-- **Material Management**
+- **Materials**
   - Copy or localize dumped materials automatically.
   - Supports shared material folders.
   - Material-only export mode.
@@ -26,7 +30,7 @@ A Python-based **pipeline for compiling, managing, and packaging Source engine r
   - Detailed logs with timestamps and colored prefixes for **MODEL**, **MATERIAL**, **DATA**, and **VPK** operations.
   - Total elapsed time reported at the end of the pipeline.
 
-- **Flexible Configuration**
+- **Configurable**
   - JSON-based configuration to define:
     - Models, QC files, submodels.
     - Materials and material sets.
@@ -44,68 +48,36 @@ pip install -r requirements.txt
 ```
 
 ## Sample JSON
-```json
-{
-    "studiomdl": "D:/SteamLibrary/steamapps/common/Left 4 Dead 2/bin/nekomdl.exe",
-    "gameinfo": "D:/SteamLibrary/steamapps/common/Left 4 Dead 2/left4dead2/gameinfo.txt",
-    "vtfcmd": "D:/Portable Program Files/VTFeditReloaded/VTFCmd.exe",
-    "vpk": "D:/SteamLibrary/steamapps/common/Left 4 Dead 2/bin/vpk.exe",
+```Refer to the sample json in sample_json/```
 
-    "model": {
-        "human_01": {
-            "qc": "D:/SteamLibrary/steamcontents/characters/toppi/l4d2/hsr/asta_def/tools_preview.qc",
-            "submodels": {
-                "anims": "biker_arms.qc"
-            },
-            "subdata": [
-                {
-                    "input": "D:/SteamLibrary/steamcontents/characters/toppi/l4d2/hsr/asta_def/scripts/addoninfo.txt",
-                    "output": "addoninfo.txt",
-                    "replace": {
-                        "$CHARA$": "human_01"
-                    }
-                },
-                {
-                    "input": "D:/SteamLibrary/steamcontents/characters/toppi/l4d2/hsr/asta_def/materials/Lobby.psd",
-                    "output": "materials/vgui/select_francis.vtf",
-                    "vtf": {
-                        "flags": ["NOMIP", "NOLOD"],
-                        "encoder_args": ["-format", "DXT1", "-nomipmaps"]
-                    }
-                }
-            ]
-        }
-    },
-
-    "material": {
-        "test_materials": {
-            "materials": [
-                "D:/SteamLibrary/steamapps/common/Left 4 Dead 2/left4dead2_workshop/materials/models/characters/toppi/hsr/march7th_def/cloth2.vmt"
-            ]
-        }
-    },
-
-    "data": {
-        "AssetShared": [
-            {
-                "input": "D:/SteamLibrary/steamcontents/characters/toppi/l4d2/hsr/asta_def/scripts/addoninfo.txt",
-                "output": "addoninfo.txt"
-            }
-        ]
-    }
-}
-```
 ## Run
 ```cmd
-python resourcecompiler.py -config path/to/config.json --verbose --vpk
+python resourcecompiler.py -config path/to/<config name>.json [args...]
 ```
 
-##Arguments
+## Command-Line Arguments
+
 | Argument             | Description                                                                 |
 |----------------------|-----------------------------------------------------------------------------|
-| `-config`            | **Required** — Path to the JSON config file containing models, materials, and data. |
-| `--nomaterial`       | Skip material mapping and copying for models.                                |
+| `-config` / `--config` | **Required** — Path to the JSON config file containing models, materials, and pipeline data. |
+| `--dir`              | Optional — Absolute path to override the input/output root directory for compiling. |
+| `--log`              | Enable logging to a timestamped file under `resourcecompiler-log` relative to the config file or `--dir`. |
+| `--verbose`          | Enable verbose logging for detailed output in the console and log file.    |
+
+### ValveModel Pipeline Options
+| Argument             | Description                                                                 |
+|----------------------|-----------------------------------------------------------------------------|
+| `--exportdir`        | Root folder for compiled output (default: `compile`).                       |
+| `--nomaterial`       | Skip material mapping and copying for models.                               |
 | `--nolocalize`       | Keep original folder structure for materials instead of localizing.         |
 | `--sharedmaterials`  | Copy model materials into a shared folder (`compile/Assetshared`) instead of per-model folders. |
-| `--verbose`          | Enable verbose logging for detailed output.                                  |
-| `--vpk`              | Package each compiled subfolder into a VPK.                                  |
+| `--vpk`              | Package each compiled subfolder into a VPK.                                 |
+| `--archive`          | Archive existing compiled files instead of deletion.                        |
+| `--game`             | Compile models directly in the game's directory and skip material collection and VPK packaging. |
+
+### ValveTexture Pipeline Options
+| Argument             | Description                                                                 |
+|----------------------|-----------------------------------------------------------------------------|
+| `--forceupdate`      | Force reprocessing of all textures, even if output VTFs are up-to-date.    |
+| `--allow_reprocess`  | Allow the same source file to be processed multiple times if matched by multiple JSON entries. |
+
