@@ -2,6 +2,8 @@
 
 A Python-based **pipeline for compiling, and packaging Source engine resources** (models, materials, scripts, etc). Designed for games like **Left 4 Dead 2 or Garry's Mod**, this tool automates compilation, material processing, subdata export, and optional VPK packaging.  
 
+<img width="1493" height="808" alt="image" src="https://github.com/user-attachments/assets/d40186b4-e47b-416c-b43e-e8c6f49a10a8" />
+
 ## Compatibility
 
 Windows & Python 3.10+
