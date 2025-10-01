@@ -152,11 +152,11 @@ def ValveModel_compile_single_model(model_name, model_data, compile_root, studio
     game_dir = None
     model_logger.info(f"Compiling model {qc_path.name}")
     
-    if args.game:
-        game_dir = gameinfo_dir
-    else:
-        output_dir = compile_root / model_name
-        output_dir.mkdir(parents=True, exist_ok=True)
+    #if args.game:
+    #    game_dir = gameinfo_dir
+    #else:
+    output_dir = compile_root / model_name
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     success, compiled_files, dumped_materials = model_compile_studiomdl(
         studiomdl_exe=studiomdl_exe,
@@ -199,8 +199,8 @@ def ValveModel_compile_single_model(model_name, model_data, compile_root, studio
             dumped_materials.update(set(sub_dumped_materials))
             model_logger.info(f"Compiled {sub_qc_path.name} ({len(sub_dumped_materials)} materials)")
             
-    if args.game:
-        return
+    #if args.game:
+    #    return
 
     # Material Copy
     if not args.nomaterial:
@@ -286,7 +286,7 @@ def ValveModel(config, args, logger : Logger):
     for model_name, model_data in config.get("model", {}).items():
         ValveModel_compile_single_model(model_name, model_data, compile_root, studiomdl_exe, search_paths, vtfcmd_exe, gameinfo_dir, args, logger)
         
-    if args.game: return
+    #if args.game: return
 
     # Material sets
     for set_name, set_data in config.get("material", {}).items():
@@ -460,7 +460,7 @@ def main():
         parser.add_argument("--sharedmaterials", action="store_true", help="Copy model materials into compile/Assetshared.")
         parser.add_argument("--vpk", action="store_true", help="Package each compiled subfolder into a VPK.")
         parser.add_argument("--archive", action="store_true", help="Archive existing compiled files instead of deletion")
-        parser.add_argument("--game", action="store_true", help="Compile the model in the game's directory and skip material collection and vpk")
+        #parser.add_argument("--game", action="store_true", help="Compile the model in the game's directory and skip material collection and vpk")
         
     elif header == 'ValveTexture':
         parser.add_argument("--forceupdate", action="store_true",
