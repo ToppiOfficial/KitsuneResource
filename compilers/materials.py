@@ -3,9 +3,6 @@ import re
 import shutil
 from collections import Counter
 import subprocess
-from PIL import Image
-from tempfile import NamedTemporaryFile
-
 
 # Commands in VMT that reference textures
 TEXTURE_KEYS = {
@@ -102,12 +99,6 @@ def copy_materials(
     localize_data: bool = True,
     logger: "Logger | None" = None
 ) -> list[Path]:
-    """
-    Copy VMTs and their textures into export_dir/materials.
-    If localize_data is True, re-map any out-of-place files into a shared/ folder
-    under the majority folder, and rewrite VMTs with updated texture paths.
-    If localize_data is False, preserve original folder structure and spacing.
-    """
     copied_files = []
     processed_vmts = set()
 
@@ -116,33 +107,19 @@ def copy_materials(
             logger.warn("No materials to copy.")
         return copied_files
 
-    # Resolve majority folder (only used when localizing)
-    vmt_dirs = [vmt.parent for vmt in material_to_vmt.values()]
-    majority_folder = Counter(vmt_dirs).most_common(1)[0][0]
-    if logger:
-        logger.debug(f"Majority folder resolved to: {majority_folder}")
-
-    def relative_to_materials(path: Path) -> Path:
+    def relative_to_materials_root(path: Path) -> Path:
+        """Return path starting from the first 'materials' folder."""
         try:
             idx = path.parts.index("materials")
-            return Path(*path.parts[idx + 1:])
+            return Path(*path.parts[idx:])
         except ValueError:
-            if logger:
-                logger.debug(f"Path not under 'materials': {path}")
-            return Path(path.name)
+            return Path("materials") / path.name
 
-    def localize_path(abs_path: Path) -> Path:
-        rel_path = relative_to_materials(abs_path)
-        if localize_data:
-            try:
-                abs_path.relative_to(majority_folder)
-            except ValueError:
-                rel_path = Path(
-                    *majority_folder.parts[majority_folder.parts.index("materials")+1:]
-                ) / "shared" / abs_path.name
-                if logger:
-                    logger.debug(f"Localized {abs_path} -> {rel_path}")
-        return Path("materials") / rel_path
+    def localize_vtf(vtf_path: Path, vmt_path: Path) -> Path:
+        """Move VTF to vmt.parent/shared/ if outside vmt folder."""
+        if not localize_data or vtf_path.parent == vmt_path.parent:
+            return export_dir / relative_to_materials_root(vtf_path)
+        return export_dir / relative_to_materials_root(vmt_path).parent / "shared" / vtf_path.name
 
     def _process_vmt(vmt_path: Path):
         if vmt_path in processed_vmts:
@@ -155,27 +132,26 @@ def copy_materials(
             return
 
         processed_vmts.add(vmt_path)
-        dest_rel_vmt = localize_path(vmt_path)
-        dest_vmt = export_dir / dest_rel_vmt
+
+        # Copy VMT
+        dest_vmt = export_dir / relative_to_materials_root(vmt_path)
         dest_vmt.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(vmt_path, dest_vmt)
         copied_files.append(dest_vmt)
-
         if logger:
-            logger.info(f"\tCopied VMT: {dest_rel_vmt}")
+            logger.info(f"Copied VMT: {dest_vmt.relative_to(export_dir)}")
 
-        # Read lines exactly as-is to preserve spacing
         with open(vmt_path, "r", encoding="utf-8", errors="ignore") as f:
             lines = f.readlines()
-            
-        textures = parse_vmt_textures(vmt_path)
 
+        textures = parse_vmt_textures(vmt_path)
         new_lines = []
+
         for line in lines:
-            original_line = line  # Preserve whitespace/spacing
+            original_line = line
             stripped = line.strip()
 
-            # Include match
+            # Handle included VMTs recursively
             include_match = re.match(r'include\s+"([^"]+)"', stripped, flags=re.IGNORECASE)
             if include_match:
                 include_path = include_match.group(1).replace("\\", "/")
@@ -187,9 +163,8 @@ def copy_materials(
                         _process_vmt(candidate)
                         break
 
-            # Texture match
+            # Handle texture references
             for key, tex_rel in textures.items():
-            # Check if this line contains the key
                 if key in stripped.lower():
                     tex_file = None
                     for root in search_paths:
@@ -199,28 +174,26 @@ def copy_materials(
                             break
 
                     if tex_file:
-                        dest_rel_tex = localize_path(tex_file)
-                        dest_tex = export_dir / dest_rel_tex
+                        dest_tex = localize_vtf(tex_file, vmt_path)
                         dest_tex.parent.mkdir(parents=True, exist_ok=True)
                         shutil.copy2(tex_file, dest_tex)
                         copied_files.append(dest_tex)
                         if logger:
-                            logger.debug(f"Copied texture: {dest_rel_tex}")
+                            logger.debug(f"Copied texture: {dest_tex.relative_to(export_dir)}")
 
-                        if localize_data:
-                            # Replace only the texture path, preserve indentation
+                        # Rewrite VMT line to path relative to materials/ root
+                        if localize_data and tex_file.parent != vmt_path.parent:
                             leading_ws = re.match(r"^\s*", original_line).group(0)
-                            new_tex_rel = dest_rel_tex.relative_to("materials").with_suffix("").as_posix()
+                            materials_root = export_dir / "materials"
+                            new_tex_rel = dest_tex.relative_to(materials_root).with_suffix("").as_posix()
                             original_line = f'{leading_ws}{key} "{new_tex_rel}"\n'
 
             new_lines.append(original_line)
 
-        # Rewrite only if localizing (otherwise leave file untouched)
         if localize_data:
             with open(dest_vmt, "w", encoding="utf-8") as f_out:
                 f_out.writelines(new_lines)
 
-    # Process all input VMTs
     for vmt_path in material_to_vmt.values():
         _process_vmt(vmt_path)
 

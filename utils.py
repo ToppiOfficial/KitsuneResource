@@ -1,7 +1,21 @@
 # utils.py
-import json
+import json, time
 from pathlib import Path
 from datetime import datetime
+from functools import wraps
+
+SOFTVERSION = 1.0
+SOFTVERSTATE = 'Beta'
+DEFAULT_COMPILE_ROOT  = 'Resources-Compiled'
+SUPPORTED_TEXT_FORMAT = (
+    '.txt', '.lua', '.nut', '.cfg', '.json', '.xml', '.yaml', '.yml',
+    '.ini', '.toml', '.md', '.shader', '.hlsl', '.glsl', '.jsonc', '.properties'
+)
+
+SUPPORTED_IMAGE_FORMAT = (
+    '.jpg', '.jpeg', '.gif', '.psd', '.png', '.tiff', '.tga', '.bmp', 
+    '.dds', '.hdr', '.exr', '.ico', '.webp', '.svg', '.apng'
+)
 
 class Logger:
     """
@@ -55,6 +69,7 @@ class PrefixedLogger:
     "MATERIAL": "\033[96m",  # cyan
     "DATA": "\033[93m",      # yellow
     "VPK": "\033[94m",       # bright blue
+    "OS": "\033[92m",        # green (for filesystem operations)
     }
 
     def __init__(self, base_logger, context):
@@ -75,12 +90,41 @@ class PrefixedLogger:
 
     def debug(self, msg):
         self.logger.debug(f"{self.prefix} {msg}")
+        
+def timer(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        start_time = time.time()
+        logger = None
+        try:
+            # main() now returns logger so wrapper can use it
+            logger = func(*args, **kwargs)
+        finally:
+            elapsed = time.time() - start_time
+            if logger:
+                logger.info(f"Total time elapsed: {elapsed:.2f} seconds")
+            else:
+                print(f"[INFO] Total time elapsed: {elapsed:.2f} seconds")
+        return logger
+    return wrapper
 
-def resolve_json_path(json_path, config_file):
-    """Resolve a path from JSON relative to the JSON file folder."""
-    p = Path(json_path.lstrip("/\\"))  # remove leading slash to avoid root
+def resolve_json_path(json_path, config_file, dir_override=None):
+    """Resolve a path from JSON relative to --dir if provided, otherwise relative to the JSON file folder."""
+    # Clean json_path (remove accidental leading slashes)
+    p = Path(json_path.lstrip("/\\"))
+
+    # Clean dir_override if present (strip quotes, spaces)
+    clean_dir = None
+    if dir_override:
+        clean_dir = str(dir_override).strip(' "\'')
+
+    # Resolve relative paths
     if not p.is_absolute():
-        p = Path(config_file).parent / p
+        if clean_dir:  # prefer --dir root
+            p = Path(clean_dir) / p
+        else:  # fallback to JSON folder
+            p = Path(config_file).parent / p
+
     return p.resolve()
 
 def format_file_count(count):
@@ -109,28 +153,71 @@ def rel_path(path: Path, base: Path) -> Path:
     except ValueError:
         return path
 
-def parse_config_json(config_path):
+def deep_merge(base: dict, override: dict) -> dict:
+    """
+    Recursively merge two dicts. override takes precedence over base.
+    """
+    result = base.copy()
+    for key, value in override.items():
+        if key in result and isinstance(result[key], dict) and isinstance(value, dict):
+            result[key] = deep_merge(result[key], value)
+        else:
+            result[key] = value
+    return result
+
+def parse_config_json(config_path: str, seen_paths=None, filter_keys=None) -> dict:
+    """
+    Load a config.json for Source Resource Compiler with optional 'include' support.
+    Included JSONs are merged recursively. Current JSON values override included JSONs.
+    
+    Args:
+        config_path: Path to the main JSON file.
+        seen_paths: Internal set to detect circular includes (do not pass manually).
+        filter_keys: Optional list of keys to exclude from included JSONs.
+                     By default we exclude "include" itself to prevent infinite recursion.
+    """
+    if seen_paths is None:
+        seen_paths = set()
+    if filter_keys is None:
+        filter_keys = []
+
     config_path = Path(config_path).resolve()
+    if config_path in seen_paths:
+        raise ValueError(f"Circular include detected: {config_path}")
+    seen_paths.add(config_path)
+
     if not config_path.exists():
         raise FileNotFoundError(f"Config file not found: {config_path}")
-    
+
     with config_path.open("r", encoding="utf-8") as f:
         config = json.load(f)
 
-    # Ensure structure is sane
-    if "model" not in config or not isinstance(config["model"], dict):
-        raise ValueError("Invalid config.json: 'model' must be a dictionary.")
-    
+    includes = config.get("include")
+    if includes:
+        if isinstance(includes, str):
+            includes = [includes]
+        included_data = {}
+        for inc_path in includes:
+            inc_path = Path(inc_path).resolve()
+            # Always filter out "include" from included JSONs to avoid nested includes
+            inc_json = parse_config_json(inc_path, seen_paths, filter_keys=["include"] + filter_keys)
+            included_data = deep_merge(included_data, inc_json)
+        config = deep_merge(included_data, config)
+
+    if "header" not in config:
+        raise ValueError("Invalid config.json: missing 'header' field.")
+
     return config
 
 def print_header():
     ascii_art = r"""
-  _____  ______  _____  ____  _    _ _____   _____ ______ _____ ____  __  __ _____ _____ _      ______ _____  
- |  __ \|  ____|/ ____|/ __ \| |  | |  __ \ / ____|  ____/ ____/ __ \|  \/  |  __ \_   _| |    |  ____|  __ \ 
- | |__) | |__  | (___ | |  | | |  | | |__) | |    | |__ | |   | |  | | \  / | |__) || | | |    | |__  | |__) |
- |  _  /|  __|  \___ \| |  | | |  | |  _  /| |    |  __|| |   | |  | | |\/| |  ___/ | | | |    |  __| |  _  / 
- | | \ \| |____ ____) | |__| | |__| | | \ \| |____| |___| |___| |__| | |  | | |    _| |_| |____| |____| | \ \ 
- |_|  \_\______|_____/ \____/ \____/|_|  \_\\_____|______\_____\____/|_|  |_|_|   |_____|______|______|_|  \_\
+  _  _______ _______ _____ _    _ _   _ ______ _____  ______  _____  ____  _    _ _____   _____ ______ 
+ | |/ /_   _|__   __/ ____| |  | | \ | |  ____|  __ \|  ____|/ ____|/ __ \| |  | |  __ \ / ____|  ____|
+ | ' /  | |    | | | (___ | |  | |  \| | |__  | |__) | |__  | (___ | |  | | |  | | |__) | |    | |__   
+ |  <   | |    | |  \___ \| |  | | . ` |  __| |  _  /|  __|  \___ \| |  | | |  | |  _  /| |    |  __|  
+ | . \ _| |_   | |  ____) | |__| | |\  | |____| | \ \| |____ ____) | |__| | |__| | | \ \| |____| |____ 
+ |_|\_\_____|  |_| |_____/ \____/|_| \_|______|_|  \_\______|_____/ \____/ \____/|_|  \_\\_____|______|
+                                                                                                       
 """
 
     # Center the extra lines based on the widest line in the ASCII art
@@ -138,7 +225,7 @@ def print_header():
     max_width = max(len(line) for line in art_lines)
 
     extra_lines = [
-        "Resource Compiler v1.0",
+        f"KitsuneResource {SOFTVERSTATE} {SOFTVERSION}",
         "by Toppi"
     ]
 

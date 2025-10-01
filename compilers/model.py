@@ -2,6 +2,7 @@ import subprocess
 from pathlib import Path
 import shutil
 import re
+from utils import Logger
 
 def model_compile_studiomdl(
     studiomdl_exe: str | Path,
@@ -9,7 +10,7 @@ def model_compile_studiomdl(
     output_dir: str | Path = None,
     game_dir: str | Path = None,
     verbose: bool = False,
-    logger: "Logger" = None,  # NEW: optional logger
+    logger: Logger = None,  # NEW: optional logger
 ) -> tuple[bool, list[Path], list[str]]:
     """
     Compile a Source model using studiomdl.exe and optionally return dumped materials.

@@ -1,0 +1,45 @@
+{
+    "header": "ValveTexture",
+    "vtfcmd": "D:/Portable Program Files/VTFeditReloaded/VTFCmd.exe",
+    "vtf": {
+        "eye": {
+            "input": ".*eye.*\\.(psd|png|tga|jpg|dds)$",
+            "vtf": {
+                "flags" : ["CLAMPS", "CLAMPT"],
+                "encoder_args": ["-format", "DXT1", "-alphaformat", "DXT5"]
+            }
+        },
+        "diffuse": {
+            "input": ".*_d\\.(psd|png|tga|jpg|dds)$",
+            "vtf":{
+                "encoder_args": ["-format", "DXT1", "-alphaformat", "DXT5"]
+            }
+        },
+        "normal": {
+            "input": ".*_n\\.(psd|png|tga|jpg|dds)$",
+            "vtf": {
+                "flags": ["NORMAL"],
+                "encoder_args": ["-format", "DXT1", "-alphaformat", "DXT5"]
+            }
+        },
+        "exponent": {
+            "input": ".*_e\\.(psd|png|tga|jpg|dds)$",
+            "vtf":{
+                "encoder_args": ["-format", "DXT1", "-alphaformat", "DXT5"]
+            }
+        },
+        "emissive": {
+            "input": ".*_em(_flow|_base)?\\.(psd|png|tga|jpg|dds)$",
+            "vtf": {
+                "encoder_args": ["-format", "DXT1", "-alphaformat", "DXT5"]
+            }
+        },
+        "LightWarp": {
+            "input": ".*warp.*\\.(psd|png|tga|jpg|dds)$",
+            "vtf": {
+                "flags" : ["CLAMPS", "CLAMPT"],
+                "encoder_args": ["-format", "BGR888", "-rclampwidth", "256"]
+            }
+        }
+    }
+}
