@@ -75,7 +75,7 @@ python resourcecompiler.py -config path/to/<config name>.json [args...]
 | `--sharedmaterials`  | Copy model materials into a shared folder (`compile/Assetshared`) instead of per-model folders. |
 | `--vpk`              | Package each compiled subfolder into a VPK.                                 |
 | `--archive`          | Archive existing compiled files instead of deletion.                        |
-| `--game`             | Compile models directly in the game's directory and skip material collection and VPK packaging. |
+| `--game (DISABLED)`             | Compile models directly in the game's directory and skip material collection and VPK packaging. |
 
 ### ValveTexture Pipeline Options
 | Argument             | Description                                                                 |
