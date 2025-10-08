@@ -10,7 +10,7 @@
             }
         },
         "diffuse": {
-            "input": ".*_d\\.(psd|png|tga|jpg|dds)$",
+            "input": ".*_(?:d|color|rgb)\\.(psd|png|tga|jpg|dds)$",
             "vtf":{
                 "encoder_args": ["-format", "DXT1", "-alphaformat", "DXT5"]
             }
@@ -19,7 +19,7 @@
             "input": ".*_n\\.(psd|png|tga|jpg|dds)$",
             "vtf": {
                 "flags": ["NORMAL"],
-                "encoder_args": ["-format", "DXT1", "-alphaformat", "DXT5"]
+                "encoder_args": ["-format", "BGR888", "-alphaformat", "BGRA8888"]
             }
         },
         "exponent": {

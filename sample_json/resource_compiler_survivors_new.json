@@ -1,0 +1,380 @@
+{
+    "header" : "ValveModel",
+    "studiomdl": "D:/SteamLibrary/steamapps/common/Left 4 Dead 2/bin/nekomdl.exe",
+    "gameinfo": "D:/SteamLibrary/steamapps/common/Left 4 Dead 2/left4dead2/gameinfo.txt",
+    "vtfcmd": "D:/Portable Program Files/VTFeditReloaded/VTFCmd.exe",
+    "vpk": "D:/SteamLibrary/steamapps/common/Left 4 Dead 2/bin/vpk.exe",
+    
+    "model": {
+        "Bill": {
+            "qc": "namvet.qc",
+            "compile": true,
+            "submodels": {
+                "arms": "namvet_arms.qc",
+                "deathpose": "namvet_deathpose.qc"
+            },
+            "subdata": [
+                {
+                    "input": "scripts/addoninfo.txt",
+                    "output": "addoninfo.txt",
+                    "replace": {
+                        "$CHARA$": "Bill"
+                    }
+                },
+                {
+                    "input": "gui/workshop_landscape.psd",
+                    "output": "addonimage.jpg"
+                },
+                {
+                    "input": "gui/Lobby.psd",
+                    "output": "materials/vgui/select_bill.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT1", "-nomipmaps"]
+                    }
+                },
+                {
+                    "input": "gui/ingame.psd",
+                    "output": "materials/vgui/s_panel_namvet.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT1", "-nomipmaps"]
+                    }
+                },
+                {
+                    "input": "gui/incap.dds",
+                    "output": "materials/vgui/s_panel_namvet_incap.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT5", "-nomipmaps"]
+                    }
+                }
+            ]
+        },
+        "Francis": {
+            "qc": "biker.qc",
+            "compile": true,
+            "submodels": {
+                "arms": "biker_arms.qc",
+                "light": "biker_light.qc"
+            },
+            "subdata": [
+                {
+                    "input": "scripts/addoninfo.txt",
+                    "output": "addoninfo.txt",
+                    "replace": {
+                        "$CHARA$": "Francis"
+                    }
+                },
+                {
+                    "input": "gui/workshop_landscape.psd",
+                    "output": "addonimage.jpg"
+                },
+                {
+                    "input": "gui/Lobby.psd",
+                    "output": "materials/vgui/select_francis.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT1", "-nomipmaps"]
+                    }
+                },
+                {
+                    "input": "gui/ingame.psd",
+                    "output": "materials/vgui/s_panel_biker.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT1", "-nomipmaps"]
+                    }
+                },
+                {
+                    "input": "gui/incap.dds",
+                    "output": "materials/vgui/s_panel_biker_incap.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT5", "-nomipmaps"]
+                    }
+                }
+            ]
+        },
+        "Louis": {
+            "qc": "manager.qc",
+            "compile": true,
+            "submodels": {
+                "arms": "manager_arms.qc"
+            },
+            "subdata": [
+                {
+                    "input": "scripts/addoninfo.txt",
+                    "output": "addoninfo.txt",
+                    "replace": {
+                        "$CHARA$": "Louis"
+                    }
+                },
+                {
+                    "input": "gui/workshop_landscape.psd",
+                    "output": "addonimage.jpg"
+                },
+                {
+                    "input": "gui/Lobby.psd",
+                    "output": "materials/vgui/select_louis.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT1", "-nomipmaps"]
+                    }
+                },
+                {
+                    "input": "gui/ingame.psd",
+                    "output": "materials/vgui/s_panel_manager.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT1", "-nomipmaps"]
+                    }
+                },
+                {
+                    "input": "gui/incap.dds",
+                    "output": "materials/vgui/s_panel_manager_incap.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT5", "-nomipmaps"]
+                    }
+                }
+            ]
+        },
+        "Zoey": {
+            "qc": "teenangst.qc",
+            "compile": true,
+            "submodels": {
+                "arms": "teenangst_arms.qc",
+                "light": "teenangst_light.qc"
+            },
+            "subdata": [
+                {
+                    "input": "scripts/addoninfo.txt",
+                    "output": "addoninfo.txt",
+                    "replace": {
+                        "$CHARA$": "Zoey"
+                    }
+                },
+                {
+                    "input": "gui/workshop_landscape.psd",
+                    "output": "addonimage.jpg"
+                },
+                {
+                    "input": "gui/Lobby.psd",
+                    "output": "materials/vgui/select_zoey.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT1", "-nomipmaps"]
+                    }
+                },
+                {
+                    "input": "gui/ingame.psd",
+                    "output": "materials/vgui/s_panel_teenangst.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT1", "-nomipmaps"]
+                    }
+                },
+                {
+                    "input": "gui/incap.dds",
+                    "output": "materials/vgui/s_panel_teenangst_incap.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT5", "-nomipmaps"]
+                    }
+                }
+            ]
+        },
+        "Coach": {
+            "qc": "coach.qc",
+            "compile": true,
+            "submodels": {
+                "arms": "coach_arms.qc"
+            },
+            "subdata": [
+                {
+                    "input": "scripts/addoninfo.txt",
+                    "output": "addoninfo.txt",
+                    "replace": {
+                        "$CHARA$": "Coach"
+                    }
+                },
+                {
+                    "input": "gui/workshop_landscape.psd",
+                    "output": "addonimage.jpg"
+                },
+                {
+                    "input": "gui/Lobby.psd",
+                    "output": "materials/vgui/s_panel_lobby_coach.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT1", "-nomipmaps"]
+                    }
+                },
+                {
+                    "input": "gui/ingame.psd",
+                    "output": "materials/vgui/s_panel_coach.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT1", "-nomipmaps"]
+                    }
+                },
+                {
+                    "input": "gui/incap.dds",
+                    "output": "materials/vgui/s_panel_coach_incap.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT5", "-nomipmaps"]
+                    }
+                }
+            ]
+        },
+        "Ellis": {
+            "qc": "mechanic.qc",
+            "compile": true,
+            "submodels": {
+                "arms": "mechanic_arms.qc"
+            },
+            "subdata": [
+                {
+                    "input": "scripts/addoninfo.txt",
+                    "output": "addoninfo.txt",
+                    "replace": {
+                        "$CHARA$": "Ellis"
+                    }
+                },
+                {
+                    "input": "gui/workshop_landscape.psd",
+                    "output": "addonimage.jpg"
+                },
+                {
+                    "input": "gui/Lobby.psd",
+                    "output": "materials/vgui/s_panel_lobby_mechanic.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT1", "-nomipmaps"]
+                    }
+                },
+                {
+                    "input": "gui/ingame.psd",
+                    "output": "materials/vgui/s_panel_mechanic.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT1", "-nomipmaps"]
+                    }
+                },
+                {
+                    "input": "gui/incap.dds",
+                    "output": "materials/vgui/s_panel_mechanic_incap.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT5", "-nomipmaps"]
+                    }
+                }
+            ]
+        },
+        "Nick": {
+            "qc": "gambler.qc",
+            "compile": true,
+            "submodels": {
+                "arms": "gambler_arms.qc"
+            },
+            "subdata": [
+                {
+                    "input": "scripts/addoninfo.txt",
+                    "output": "addoninfo.txt",
+                    "replace": {
+                        "$CHARA$": "Nick"
+                    }
+                },
+                {
+                    "input": "gui/workshop_landscape.psd",
+                    "output": "addonimage.jpg"
+                },
+                {
+                    "input": "gui/Lobby.psd",
+                    "output": "materials/vgui/s_panel_lobby_gambler.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT1", "-nomipmaps"]
+                    }
+                },
+                {
+                    "input": "gui/ingame.psd",
+                    "output": "materials/vgui/s_panel_gambler.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT1", "-nomipmaps"]
+                    }
+                },
+                {
+                    "input": "gui/incap.dds",
+                    "output": "materials/vgui/s_panel_gambler_incap.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT5", "-nomipmaps"]
+                    }
+                }
+            ]
+        },
+        "Rochelle": {
+            "qc": "producer.qc",
+            "compile": true,
+            "submodels": {
+                "arms": "producer_arms.qc"
+            },
+            "subdata": [
+                {
+                    "input": "scripts/addoninfo.txt",
+                    "output": "addoninfo.txt",
+                    "replace": {
+                        "$CHARA$": "Rochelle"
+                    }
+                },
+                {
+                    "input": "gui/workshop_landscape.psd",
+                    "output": "addonimage.jpg"
+                },
+                {
+                    "input": "gui/Lobby.psd",
+                    "output": "materials/vgui/s_panel_lobby_producer.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT1", "-nomipmaps"]
+                    }
+                },
+                {
+                    "input": "gui/ingame.psd",
+                    "output": "materials/vgui/s_panel_producer.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT1", "-nomipmaps"]
+                    }
+                },
+                {
+                    "input": "gui/incap.dds",
+                    "output": "materials/vgui/s_panel_producer_incap.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT5", "-nomipmaps"]
+                    }
+                }
+            ]
+        }
+    },
+    "data": {
+        "AssetShared": [
+            {
+                "input": "scripts/addoninfo.txt",
+                "output": "addoninfo.txt",
+                "replace": {
+                    "$CHARA$": "Shared Assets"
+                }
+            },
+            {
+                "input": "gui/workshop_landscape.psd",
+                "output": "addonimage.jpg"
+            }
+        ]
+    }
+}

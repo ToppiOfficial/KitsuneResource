@@ -41,7 +41,8 @@ Windows & Python 3.10+
 
 ## Installation
 Ensure you have Python 3.10+ installed.
-1. Clone the repository:
+1. Ensure you have studiomdl.exe, vpk.exe and VTFcmd.exe
+2. Clone the repository:
 
 ```bash
 git clone https://github.com/yourusername/source-resource-compiler.git
@@ -75,7 +76,7 @@ python resourcecompiler.py -config path/to/<config name>.json [args...]
 | `--sharedmaterials`  | Copy model materials into a shared folder (`compile/Assetshared`) instead of per-model folders. |
 | `--vpk`              | Package each compiled subfolder into a VPK.                                 |
 | `--archive`          | Archive existing compiled files instead of deletion.                        |
-| `--game (DISABLED)`             | Compile models directly in the game's directory and skip material collection and VPK packaging. |
+| `--game`             | Compile models directly in the game's directory and skip material collection and VPK packaging. |
 
 ### ValveTexture Pipeline Options
 | Argument             | Description                                                                 |
