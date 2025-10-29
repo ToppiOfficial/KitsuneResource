@@ -4,7 +4,7 @@ from pathlib import Path
 from datetime import datetime
 from functools import wraps
 
-SOFTVERSION = 1.1
+SOFTVERSION = 1.2
 SOFTVERSTATE = 'Beta'
 DEFAULT_COMPILE_ROOT  = 'Resources-Compiled'
 SUPPORTED_TEXT_FORMAT = (

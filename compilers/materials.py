@@ -4,7 +4,8 @@ import shutil
 from collections import Counter
 import subprocess
 
-# Commands in VMT that reference textures
+from utils import Logger
+
 TEXTURE_KEYS = {
     "$basetexture",
     "$basetexture2",
@@ -31,16 +32,6 @@ TEXTURE_KEYS = {
 }
 
 def find_material_vmt(material_name: str, search_paths: list[Path]) -> Path | None:
-    """
-    Locate the .vmt file for a given material name.
-
-    Args:
-        material_name: e.g. "models/characters/toppi/gf2/sharkry_def/cloth1"
-        search_paths: list of root paths from gameinfo.txt
-
-    Returns:
-        Absolute Path to the VMT file if found, else None
-    """
     relative_vmt = Path("materials") / Path(material_name + ".vmt")
     for root in search_paths:
         candidate = (root / relative_vmt).resolve()
@@ -49,9 +40,6 @@ def find_material_vmt(material_name: str, search_paths: list[Path]) -> Path | No
     return None
 
 def map_materials_to_vmt(materials_list: list[str], search_paths: list[Path]) -> dict[str, Path]:
-    """
-    Map each dumped material name to its .vmt file.
-    """
     result = {}
     for mat in materials_list:
         vmt = find_material_vmt(mat, search_paths)
@@ -59,140 +47,240 @@ def map_materials_to_vmt(materials_list: list[str], search_paths: list[Path]) ->
             result[mat] = vmt
     return result
 
-def parse_vmt_textures(vmt_path: Path) -> dict[str, Path]:
-    """
-    Parse a VMT file and extract all texture references (case-insensitive).
-
-    Args:
-        vmt_path: Path to the VMT file.
-
-    Returns:
-        Dict mapping VMT command -> referenced texture path (as Path)
-    """
-    textures = {}
+def parse_vmt_structure(vmt_path: Path) -> dict:
+    """Parse VMT file and detect if it's a patch shader, extract include path and blocks."""
     if not vmt_path.exists():
-        return textures
-
-    # Lowercase keys for case-insensitive matching
+        return {"is_patch": False, "textures": {}}
+    
+    with open(vmt_path, "r", encoding="utf-8", errors="ignore") as f:
+        content = f.read()
+    
+    lines = content.splitlines()
     lowercase_keys = {k.lower() for k in TEXTURE_KEYS}
-
-    with open(vmt_path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line.startswith("//"):
-                continue  # skip commented lines
-
-            match = re.match(r'(\$\w+)\s+"([^"]+)"', line, flags=re.IGNORECASE)
+    
+    first_line = ""
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("//"):
+            first_line = stripped
+            break
+    
+    is_patch = first_line.lower() == "patch"
+    include_path = None
+    replace_textures = {}
+    insert_textures = {}
+    regular_textures = {}
+    
+    if is_patch:
+        include_match = re.search(r'include\s+"([^"]+)"', content, flags=re.IGNORECASE)
+        if include_match:
+            include_path = include_match.group(1).replace("\\", "/")
+        
+        replace_match = re.search(r'replace\s*\{([^}]*)\}', content, flags=re.IGNORECASE | re.DOTALL)
+        if replace_match:
+            block_content = replace_match.group(1)
+            for match in re.finditer(r'(\$\w+)\s+"([^"]+)"', block_content, flags=re.IGNORECASE):
+                key, value = match.groups()
+                key_lower = key.lower()
+                if key_lower in lowercase_keys:
+                    replace_textures[key_lower] = Path(value.replace("\\", "/"))
+        
+        insert_match = re.search(r'insert\s*\{([^}]*)\}', content, flags=re.IGNORECASE | re.DOTALL)
+        if insert_match:
+            block_content = insert_match.group(1)
+            for match in re.finditer(r'(\$\w+)\s+"([^"]+)"', block_content, flags=re.IGNORECASE):
+                key, value = match.groups()
+                key_lower = key.lower()
+                if key_lower in lowercase_keys:
+                    insert_textures[key_lower] = Path(value.replace("\\", "/"))
+    else:
+        for line in lines:
+            stripped = line.strip()
+            if stripped.startswith("//"):
+                continue
+            
+            match = re.match(r'(\$\w+)\s+"([^"]+)"', stripped, flags=re.IGNORECASE)
             if match:
                 key, value = match.groups()
                 key_lower = key.lower()
                 if key_lower in lowercase_keys:
-                    # Normalize path and store as Path
-                    textures[key_lower] = Path(value.replace("\\", "/"))
+                    regular_textures[key_lower] = Path(value.replace("\\", "/"))
+    
+    return {
+        "is_patch": is_patch,
+        "include_path": include_path,
+        "replace_textures": replace_textures,
+        "insert_textures": insert_textures,
+        "textures": regular_textures
+    }
 
-    return textures
+def parse_vmt_textures(vmt_path: Path) -> dict[str, Path]:
+    """Legacy function - now calls parse_vmt_structure for backward compatibility."""
+    structure = parse_vmt_structure(vmt_path)
+    if structure["is_patch"]:
+        all_textures = {}
+        all_textures.update(structure["replace_textures"])
+        all_textures.update(structure["insert_textures"])
+        return all_textures
+    return structure["textures"]
 
 def copy_materials(
     material_to_vmt: dict[str, Path],
     export_dir: Path,
     search_paths: list[Path],
     localize_data: bool = True,
-    logger: "Logger | None" = None
+    logger: Logger | None = None
 ) -> list[Path]:
-    copied_files = []
-    processed_vmts = set()
+    copied_files: list[Path] = []
+    processed_vmts: dict[Path, Path] = {}
+    texture_cache: dict[str, Path] = {}
 
     if not material_to_vmt:
-        if logger:
-            logger.warn("No materials to copy.")
+        logger and logger.warn("No materials to copy.")
         return copied_files
 
     def relative_to_materials_root(path: Path) -> Path:
-        """Return path starting from the first 'materials' folder."""
         try:
             idx = path.parts.index("materials")
             return Path(*path.parts[idx:])
         except ValueError:
             return Path("materials") / path.name
 
-    def localize_vtf(vtf_path: Path, vmt_path: Path) -> Path:
-        """Move VTF to vmt.parent/shared/ if outside vmt folder."""
-        if not localize_data or vtf_path.parent == vmt_path.parent:
+    def find_texture(tex_rel: str) -> Path | None:
+        """Find and cache the full path of a texture relative path."""
+        if tex_rel in texture_cache:
+            return texture_cache[tex_rel]
+        for root in search_paths:
+            candidate = (root / "materials" / tex_rel).with_suffix(".vtf")
+            if candidate.exists():
+                texture_cache[tex_rel] = candidate
+                return candidate
+        return None
+
+    def localize_vtf(vtf_path: Path, dest_vmt_path: Path, nosubfolder: bool = False) -> Path:
+        """Decide where the VTF should be copied to avoid duplicate shared paths."""
+        if not localize_data:
             return export_dir / relative_to_materials_root(vtf_path)
-        return export_dir / relative_to_materials_root(vmt_path).parent / "shared" / vtf_path.name
 
-    def _process_vmt(vmt_path: Path):
+        vtf_rel = relative_to_materials_root(vtf_path)
+        vmt_rel = dest_vmt_path.relative_to(export_dir)
+
+        if vtf_rel.parent == vmt_rel.parent or nosubfolder:
+            return dest_vmt_path.parent / vtf_path.name
+
+        # Only add 'shared' if not already inside one
+        dest = dest_vmt_path.parent
+        if dest.name != "shared":
+            dest = dest / "shared"
+        return dest / vtf_path.name
+
+    def _process_vmt(vmt_path: Path, dest_vmt: Path | None = None, nosubfolder: bool = False):
+        """Process a single VMT and copy associated textures."""
         if vmt_path in processed_vmts:
-            if logger:
-                logger.debug(f"Skipping already processed VMT: {vmt_path}")
-            return
+            logger and logger.debug(f"Skipping already processed VMT: {vmt_path}")
+            return {}, processed_vmts[vmt_path]
+
         if not vmt_path.exists():
-            if logger:
-                logger.warn(f"Missing VMT: {vmt_path}")
-            return
+            logger and logger.warn(f"Missing VMT: {vmt_path}")
+            return {}, None
 
-        processed_vmts.add(vmt_path)
+        dest_vmt = dest_vmt or (export_dir / relative_to_materials_root(vmt_path))
+        processed_vmts[vmt_path] = dest_vmt
 
-        # Copy VMT
-        dest_vmt = export_dir / relative_to_materials_root(vmt_path)
         dest_vmt.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(vmt_path, dest_vmt)
         copied_files.append(dest_vmt)
-        if logger:
-            logger.info(f"Copied VMT: {dest_vmt.relative_to(export_dir)}")
+        logger and logger.info(f"Copied VMT: {dest_vmt.relative_to(export_dir)}")
 
-        with open(vmt_path, "r", encoding="utf-8", errors="ignore") as f:
-            lines = f.readlines()
+        structure = parse_vmt_structure(vmt_path)
 
-        textures = parse_vmt_textures(vmt_path)
-        new_lines = []
+        included_textures, included_vmt_dest = {}, None
+        if structure["is_patch"] and structure["include_path"]:
+            include_path = structure["include_path"]
+            for root in search_paths:
+                candidate = (root / include_path).with_suffix(".vmt")
+                if candidate.exists():
+                    logger and logger.debug(f"Found included VMT: {candidate}")
+                    included_vmt_dest = (
+                        dest_vmt.parent / "shared" / candidate.name
+                        if localize_data else None
+                    )
+                    included_textures, _ = _process_vmt(candidate, included_vmt_dest, nosubfolder=True)
+                    break
 
-        for line in lines:
-            original_line = line
-            stripped = line.strip()
+        # Merge all texture references
+        final_textures = {
+            **included_textures,
+            **structure.get("insert_textures", {}),
+            **structure.get("replace_textures", {}),
+        }
+        if not structure["is_patch"]:
+            final_textures.update(structure.get("textures", {}))
 
-            # Handle included VMTs recursively
-            include_match = re.match(r'include\s+"([^"]+)"', stripped, flags=re.IGNORECASE)
-            if include_match:
-                include_path = include_match.group(1).replace("\\", "/")
-                for root in search_paths:
-                    candidate = (root / "materials" / include_path).with_suffix(".vmt")
-                    if candidate.exists():
-                        if logger:
-                            logger.debug(f"Processing included VMT: {candidate}")
-                        _process_vmt(candidate)
-                        break
+        # Copy associated textures
+        for key, tex_rel in final_textures.items():
+            tex_file = find_texture(tex_rel)
+            if not tex_file:
+                continue
+            dest_tex = localize_vtf(tex_file, dest_vmt, nosubfolder)
+            dest_tex.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(tex_file, dest_tex)
+            copied_files.append(dest_tex)
+            logger and logger.debug(f"Copied texture: {dest_tex.relative_to(export_dir)}")
 
-            # Handle texture references
-            for key, tex_rel in textures.items():
-                if key in stripped.lower():
-                    tex_file = None
-                    for root in search_paths:
-                        candidate = (root / "materials" / tex_rel).with_suffix(".vtf")
-                        if candidate.exists():
-                            tex_file = candidate
-                            break
-
-                    if tex_file:
-                        dest_tex = localize_vtf(tex_file, vmt_path)
-                        dest_tex.parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(tex_file, dest_tex)
-                        copied_files.append(dest_tex)
-                        if logger:
-                            logger.debug(f"Copied texture: {dest_tex.relative_to(export_dir)}")
-
-                        # Rewrite VMT line to path relative to materials/ root
-                        if localize_data and tex_file.parent != vmt_path.parent:
-                            leading_ws = re.match(r"^\s*", original_line).group(0)
-                            materials_root = export_dir / "materials"
-                            new_tex_rel = dest_tex.relative_to(materials_root).with_suffix("").as_posix()
-                            original_line = f'{leading_ws}{key} "{new_tex_rel}"\n'
-
-            new_lines.append(original_line)
-
+        # Rewrite texture/include paths
         if localize_data:
+            with open(vmt_path, "r", encoding="utf-8", errors="ignore") as f:
+                lines = f.readlines()
+
+            def rewrite_path(new_path: Path, base: Path, material_root: bool = True, keep_suffix: bool = False) -> str:
+                """
+                Generate a relative, normalized material path.
+                
+                - material_root=True → relative to 'materials'
+                - keep_suffix=True → keeps file extension (for includes)
+                """
+                root = export_dir / "materials" if material_root else export_dir
+                rel = new_path.relative_to(root)
+                return rel.as_posix() if keep_suffix else rel.with_suffix("").as_posix()
+
+            new_lines = []
+            for line in lines:
+                modified = line
+
+                # Handle include rewrites
+                if structure["is_patch"] and included_vmt_dest:
+                    m = re.match(r'(\s*)include\s+"([^"]+)"', line, flags=re.IGNORECASE)
+                    if m:
+                        leading_ws = m.group(1)
+                        new_include_rel = rewrite_path(included_vmt_dest, export_dir, material_root=False, keep_suffix=True)
+                        modified = f'{leading_ws}include "{new_include_rel}"\n'
+                        logger and logger.debug(f"Rewrote include path to: {new_include_rel}")
+
+                # Handle texture rewrites
+                rewrite_targets = (
+                    structure["replace_textures"] | structure["insert_textures"]
+                    if structure["is_patch"] else structure.get("textures", {})
+                )
+                for key, tex_rel in rewrite_targets.items():
+                    if key not in line.lower():
+                        continue
+                    tex_file = find_texture(tex_rel)
+                    if not tex_file:
+                        continue
+                    dest_tex = localize_vtf(tex_file, dest_vmt)
+                    new_tex_rel = rewrite_path(dest_tex, export_dir)
+                    leading_ws = re.match(r"^\s*", line).group(0)
+                    modified = f'{leading_ws}{key} "{new_tex_rel}"\n'
+                    logger and logger.debug(f"Rewrote texture path for {key} to: {new_tex_rel}")
+                    break
+
+                new_lines.append(modified)
+
             with open(dest_vmt, "w", encoding="utf-8") as f_out:
                 f_out.writelines(new_lines)
+
+        return final_textures, dest_vmt
 
     for vmt_path in material_to_vmt.values():
         _process_vmt(vmt_path)
@@ -218,9 +306,6 @@ def export_vtf(
     extra_args=None,
     silent=True,
 ):
-    """
-    Flexible wrapper for vtfcmd.exe to convert images to VTF, always enforcing -resize.
-    """
     src_path = Path(src_path).resolve()
     dst_path = Path(dst_path).resolve()
     dst_path.parent.mkdir(parents=True, exist_ok=True)
@@ -235,7 +320,7 @@ def export_vtf(
         "-output", str(dst_path.parent),
         "-format", fmt,
         "-version", version,
-        "-resize",  # Always include -resize
+        "-resize",
     ]
 
     if resize:
@@ -249,13 +334,11 @@ def export_vtf(
     if sharpen_filter:
         args += ["-rsharpen", sharpen_filter.upper()]
 
-    # Alpha format
     args += ["-alphaformat", alpha_fmt or fmt]
 
     if silent:
         args.append("-silent")
 
-    # Flags
     if flags:
         for f in flags:
             f_clean = str(f).strip().upper()
@@ -267,7 +350,6 @@ def export_vtf(
     if nomipmaps:
         args.append("-nomipmaps")
 
-    # Normal map
     if normal_map:
         args.append("-normal")
         if normal_options:
@@ -280,11 +362,9 @@ def export_vtf(
             if "scale" in normal_options:
                 args += ["-nscale", str(normal_options["scale"])]
 
-    # Gamma correction
     if gamma_correction is not None:
         args += ["-gamma", "-gcorrection", str(gamma_correction)]
 
-    # Extra args
     if extra_args:
         args.extend(extra_args)
 
@@ -294,7 +374,6 @@ def export_vtf(
         print(f"[ERROR] VTF conversion failed: {src_path} -> {dst_path}")
         raise
 
-    # Rename output file if necessary
     converted = dst_path.parent / (src_path.stem + ".vtf")
     if converted != dst_path:
         if dst_path.exists():
