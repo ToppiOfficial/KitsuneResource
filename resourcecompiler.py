@@ -517,8 +517,14 @@ class ValveTexturePipeline:
     def _find_matching_files(self, pattern: str, root_dir: Path) -> List[Path]:
         if "*" in pattern or re.search(r"[.*+?^${}()|\[\]\\]", pattern):
             regex = re.compile(pattern)
-            return [f.resolve() for f in root_dir.rglob("*") 
-                   if f.is_file() and regex.search(f.name)]
+            recursive = getattr(self.args, "recursive", False)
+            
+            if recursive:
+                return [f.resolve() for f in root_dir.rglob("*") 
+                       if f.is_file() and regex.search(f.name)]
+            else:
+                return [f.resolve() for f in root_dir.glob("*") 
+                       if f.is_file() and regex.search(f.name)]
         
         input_path = root_dir / pattern
         return [input_path] if input_path.exists() else []
@@ -657,6 +663,8 @@ def main():
                           help="Force reprocessing all textures")
         parser.add_argument("--allow_reprocess", action="store_true",
                           help="Allow same file to be processed multiple times")
+        parser.add_argument("--recursive", action="store_true",
+                          help="Search for files recursively in subfolders")
         
         args = parser.parse_args()
         ValveTexturePipeline(config, args, logger).execute()
