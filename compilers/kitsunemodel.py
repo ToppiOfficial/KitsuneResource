@@ -1,5 +1,5 @@
 import re
-from typing import Any, List, Dict, Optional, Union
+from typing import Any, List, Dict, Optional
 
 class KitsuneNode:
     """Represents a node in the KitsuneValue format"""

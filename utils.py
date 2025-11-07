@@ -3,10 +3,12 @@ import json, time
 from pathlib import Path
 from datetime import datetime
 from functools import wraps
+from typing import List, Optional
 
-SOFTVERSION = 1.3
+SOFTVERSION = 1.4
 SOFTVERSTATE = 'Beta'
 DEFAULT_COMPILE_ROOT  = 'Resources-Compiled'
+
 SUPPORTED_TEXT_FORMAT = (
     '.txt', '.lua', '.nut', '.cfg', '.json', '.xml', '.yaml', '.yml',
     '.ini', '.toml', '.md', '.shader', '.hlsl', '.glsl', '.jsonc', '.properties'
@@ -90,7 +92,31 @@ class PrefixedLogger:
 
     def debug(self, msg):
         self.logger.debug(f"{self.prefix} {msg}")
-        
+
+class PathResolver:
+    """Handles path resolution and validation"""
+    
+    @staticmethod
+    def resolve_and_validate(config: dict, *keys) -> List[Optional[Path]]:
+        paths = []
+        for key in keys:
+            value = config.get(key)
+            if value:
+                path = Path(value).resolve()
+                paths.append(path if path.exists() else None)
+            else:
+                paths.append(None)
+        return paths
+    
+    @staticmethod
+    def get_root_dir(args, config_path: Path) -> Path:
+        if getattr(args, "dir", None):
+            root = Path(args.dir).resolve()
+            if not root.exists() or not root.is_dir():
+                raise ValueError(f"Invalid --dir path: {root}")
+            return root
+        return config_path.parent
+
 def timer(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
@@ -126,32 +152,6 @@ def resolve_json_path(json_path, config_file, dir_override=None):
             p = Path(config_file).parent / p
 
     return p.resolve()
-
-def format_file_count(count):
-    """Nice formatting for counts."""
-    return f"{count:,}"
-
-def relative_to_base(base_file: str | Path, *subpaths: str) -> Path:
-    """
-    Return a Path relative to the folder of `base_file`, optionally
-    appending additional subpaths.
-
-    Args:
-        base_file: The reference file (e.g., a QC or JSON)
-        *subpaths: Additional path parts to append
-
-    Returns:
-        Resolved Path object
-    """
-    base_folder = Path(base_file).parent.resolve()
-    return base_folder.joinpath(*subpaths).resolve()
-
-def rel_path(path: Path, base: Path) -> Path:
-    """Return path relative to base, fallback to absolute if not possible."""
-    try:
-        return path.relative_to(base)
-    except ValueError:
-        return path
 
 def deep_merge(base: dict, override: dict) -> dict:
     """

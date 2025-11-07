@@ -4,47 +4,26 @@ import os
 import re
 from pathlib import Path
 from datetime import datetime
-from typing import List, Set, Dict, Optional, Tuple
+from typing import List, Set, Optional
 
 import send2trash
 
 from utils import (
-    Logger, PrefixedLogger, timer, print_header, parse_config_json,
+    Logger, PrefixedLogger, PathResolver, timer, print_header, parse_config_json,
     resolve_json_path, DEFAULT_COMPILE_ROOT, SUPPORTED_TEXT_FORMAT,
     SUPPORTED_IMAGE_FORMAT
 )
-from compilers import materials
-from compilers.materials import export_vtf
+
+from compilers.materials import (
+    export_vtf, copy_materials, map_materials_to_vmt
+)
+
 from compilers.model import model_compile_studiomdl
 from compilers.gameinfo import get_game_search_paths
 from compilers.vpk import package_vpk
 from compilers.image import convert_image
 from compilers.qc import qc_read_materials
-
-
-class PathResolver:
-    """Handles path resolution and validation"""
-    
-    @staticmethod
-    def resolve_and_validate(config: dict, *keys) -> List[Optional[Path]]:
-        paths = []
-        for key in keys:
-            value = config.get(key)
-            if value:
-                path = Path(value).resolve()
-                paths.append(path if path.exists() else None)
-            else:
-                paths.append(None)
-        return paths
-    
-    @staticmethod
-    def get_root_dir(args, config_path: Path) -> Path:
-        if getattr(args, "dir", None):
-            root = Path(args.dir).resolve()
-            if not root.exists() or not root.is_dir():
-                raise ValueError(f"Invalid --dir path: {root}")
-            return root
-        return config_path.parent
+from compilers.vmt import VMTCreator
 
 class CompileFolderManager:
     """Manages compile folder cleanup and archiving"""
@@ -86,57 +65,6 @@ class CompileFolderManager:
                 logger.info(f"Sent to Recycle Bin: {item.relative_to(compile_root)}")
             except Exception as e:
                 logger.warn(f"Failed to remove {item}: {e}")
-
-class VMTCreator:
-    """Creates VMT files from templates"""
-    
-    @staticmethod
-    def create_from_template(vmt_template_json, vtf_path: Path, compile_root: Path, 
-                           args, logger: Logger):
-        vmt_template = resolve_json_path(vmt_template_json, args.config, args.dir)
-        if not vmt_template.exists():
-            logger.warn(f"VMT template not found, skipping: {vmt_template}")
-            return
-        
-        vmt_dst = vtf_path.with_suffix(".vmt")
-        vtf_rel_posix = VMTCreator._get_relative_path(vtf_path, compile_root)
-        
-        template_content = vmt_template.read_text(encoding="utf-8")
-        processed_content = VMTCreator._process_template(template_content, vtf_rel_posix)
-        
-        vmt_dst.write_text(processed_content, encoding="utf-8")
-        logger.info(f"VMT created: {vmt_dst.relative_to(compile_root)}")
-    
-    @staticmethod
-    def _get_relative_path(vtf_path: Path, materials_root: Path) -> str:
-        materials_root = materials_root / "AssetShared"
-        try:
-            vtf_rel = vtf_path.relative_to(materials_root).with_suffix("")
-            vtf_rel_posix = vtf_rel.as_posix()
-            if vtf_rel_posix.startswith("materials/"):
-                vtf_rel_posix = vtf_rel_posix[len("materials/"):]
-            return vtf_rel_posix
-        except ValueError:
-            return vtf_path.stem
-    
-    @staticmethod
-    def _process_template(content: str, texture_path: str) -> str:
-        lines = []
-        for line in content.splitlines():
-            stripped = line.strip()
-            
-            if stripped.startswith("$basetexture"):
-                leading_ws = line[:line.index("$basetexture")]
-                lines.append(f'{leading_ws}$basetexture "{texture_path}"')
-            elif stripped.startswith('"$'):
-                first_space = line.find(' ')
-                key = line[:first_space].replace('"', '')
-                rest = line[first_space+1:]
-                lines.append(f'{key} {rest}')
-            else:
-                lines.append(line)
-        
-        return "\n".join(lines)
 
 class DataProcessor:
     """Processes various data items (files, textures, conversions)"""
@@ -343,8 +271,8 @@ class ModelCompiler:
             mat_logger.debug(mat)
         
         mat_logger.info(f"Copying {len(dumped_materials)} materials to {copy_target}...")
-        material_to_vmt = materials.map_materials_to_vmt(qc_material_paths, self.search_paths)
-        copied_files = materials.copy_materials(
+        material_to_vmt = map_materials_to_vmt(qc_material_paths, self.search_paths)
+        copied_files = copy_materials(
             material_to_vmt,
             copy_target,
             self.search_paths,

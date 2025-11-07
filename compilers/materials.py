@@ -1,9 +1,7 @@
 from pathlib import Path
 import re
 import shutil
-from collections import Counter
 import subprocess
-
 from utils import Logger
 
 TEXTURE_KEYS = {
