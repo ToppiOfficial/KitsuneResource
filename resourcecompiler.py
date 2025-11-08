@@ -305,7 +305,7 @@ class MaterialSetCopier:
         output_dir.mkdir(parents=True, exist_ok=True)
         
         material_to_vmt = {Path(vmt): Path(vmt) for vmt in vmt_list}
-        copied_files = materials.copy_materials(
+        copied_files = copy_materials(
             material_to_vmt,
             output_dir,
             search_paths,
