@@ -19,7 +19,7 @@
             "input": ".*_(?:n|normal)\\.(psd|png|tga|jpg|dds)$",
             "vtf": {
                 "flags": ["NORMAL"],
-                "encoder_args": ["-format", "DXT1", "-alphaformat", "DXT5"]
+                "encoder_args": ["-format", "BGRA8888", "-alphaformat", "BGRA8888"]
             }
         },
         "exponent": {

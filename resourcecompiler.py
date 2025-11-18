@@ -215,7 +215,7 @@ class ModelCompiler:
         dumped_materials = set(dumped_materials)
         model_logger.info(f"Compiled {qc_path.name} ({len(dumped_materials)} materials)")
         
-        self._compile_submodels(model_data, qc_path, output_dir, dumped_materials, model_logger)
+        self._compile_submodels(model_data, qc_path, output_dir, dumped_materials, model_logger, game_dir=self.gameinfo_dir)
         
         if self.args.game:
             model_logger.info("--game mode: Skipping material copy and subdata processing")
@@ -225,7 +225,7 @@ class ModelCompiler:
         self._process_subdata(model_data, output_dir, compile_root)
     
     def _compile_submodels(self, model_data: dict, qc_path: Path, output_dir: Optional[Path],
-                          dumped_materials: Set, logger: Logger):
+                          dumped_materials: Set, logger: Logger, game_dir : Path):
         for sub_name, sub_qc in model_data.get("submodels", {}).items():
             sub_qc_path = Path(sub_qc)
             if not sub_qc_path.is_absolute():
@@ -238,7 +238,7 @@ class ModelCompiler:
             
             logger.info(f"Compiling sub-QC: {sub_qc_path.name}")
             
-            game_dir = self.gameinfo_dir if self.args.game else None
+            game_dir = game_dir
             
             success, _, sub_dumped = model_compile_studiomdl(
                 studiomdl_exe=self.studiomdl_exe,

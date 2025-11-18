@@ -5,7 +5,7 @@ from datetime import datetime
 from functools import wraps
 from typing import List, Optional
 
-SOFTVERSION = 1.5
+SOFTVERSION = 1.6
 SOFTVERSTATE = 'Beta'
 DEFAULT_COMPILE_ROOT  = 'Resources-Compiled'
 
