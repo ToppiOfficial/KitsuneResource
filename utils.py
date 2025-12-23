@@ -5,9 +5,9 @@ from datetime import datetime
 from functools import wraps
 from typing import List, Optional
 
-SOFTVERSION = 1.7
-SOFTVERSTATE = 'Beta'
-DEFAULT_COMPILE_ROOT  = 'Resources-Compiled'
+SOFTVERSION = 1.0
+SOFTVERSTATE = 'Release'
+DEFAULT_COMPILE_ROOT  = 'ExportedResource'
 
 SUPPORTED_TEXT_FORMAT = (
     '.txt', '.lua', '.nut', '.cfg', '.json', '.xml', '.yaml', '.yml',
@@ -16,7 +16,7 @@ SUPPORTED_TEXT_FORMAT = (
 
 SUPPORTED_IMAGE_FORMAT = (
     '.jpg', '.jpeg', '.gif', '.psd', '.png', '.tiff', '.tga', '.bmp', 
-    '.dds', '.hdr', '.exr', '.ico', '.webp', '.svg', '.apng'
+    '.dds', '.hdr', '.exr', '.ico', '.webp', '.svg', '.apng', '.mks'
 )
 
 class Logger:

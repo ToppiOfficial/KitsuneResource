@@ -2,6 +2,7 @@ import argparse
 import shutil
 import os
 import re
+import sys
 from pathlib import Path
 from datetime import datetime
 from typing import List, Set, Optional
@@ -57,14 +58,32 @@ class CompileFolderManager:
             logger.warn(f"Failed to archive compile folder: {e}")
     
     @staticmethod
-    def _trash(compile_root: Path, logger: Logger):
+    def _trash(compile_root: Path, logger: Logger, legacy_mode: bool = False):
+        """
+        Remove compile folder contents. 
+        By default removes entire folder at once; legacy_mode removes item by item.
+        """
+        def _trash_items():
+            for item in compile_root.iterdir():
+                try:
+                    send2trash.send2trash(item)
+                    logger.info(f"Sent to Recycle Bin: {item.relative_to(compile_root)}")
+                except Exception as e:
+                    logger.warn(f"Failed to remove {item}: {e}")
+        
         logger.info("Cleaning existing compile folder...")
-        for item in compile_root.iterdir():
+        
+        if legacy_mode:
+            _trash_items()
+        else:
             try:
-                send2trash.send2trash(item)
-                logger.info(f"Sent to Recycle Bin: {item.relative_to(compile_root)}")
+                send2trash.send2trash(compile_root)
+                logger.info(f"Sent to Recycle Bin: {compile_root.name}")
+                compile_root.mkdir(parents=True, exist_ok=True)
             except Exception as e:
-                logger.warn(f"Failed to remove {item}: {e}")
+                logger.error(f"Failed to remove compile folder: {e}")
+                logger.info("Falling back to item-by-item deletion...")
+                _trash_items()
 
 class DataProcessor:
     """Processes various data items (files, textures, conversions)"""
@@ -205,7 +224,7 @@ class ModelCompiler:
             output_dir=output_dir,
             game_dir=game_dir,
             verbose=self.args.verbose,
-            logger=self.logger,
+            logger=model_logger,
         )
         
         if not success:
@@ -246,7 +265,7 @@ class ModelCompiler:
                 output_dir=output_dir,
                 game_dir=game_dir,
                 verbose=self.args.verbose,
-                logger=self.logger,
+                logger=logger,
             )
             
             if success:
@@ -518,9 +537,52 @@ class ValveTexturePipeline:
         except Exception as e:
             self.logger.error(f"Failed to export {src_file} → {output_path}: {e}")
 
+def wait_for_keypress():
+    """Wait for user to press any key before exiting"""
+    try:
+        input("\nPress Enter to exit...")
+    except (EOFError, KeyboardInterrupt):
+        pass
+
+def display_help():
+    """Display comprehensive help information"""
+    print("\n" + "="*60)
+    print("KITSUNERESOURCE")
+    print("="*60 + "\n")
+    print("USAGE:")
+    print("  KitsuneResource.exe --config <path> [options]\n")
+    print("REQUIRED ARGUMENTS:")
+    print("  --config CONFIG_JSON    Path to config.json file\n")
+    print("GLOBAL OPTIONS:")
+    print("  --log                   Enable logging to file")
+    print("  --verbose               Enable verbose logging")
+    print("  --dir PATH              Override input/output root directory\n")
+    print("VALVEMODEL PIPELINE OPTIONS:")
+    print("  --exportdir DIR         Root folder for compiled output")
+    print("  --nomaterial            Skip material mapping/copying")
+    print("  --nolocalize            Disable material localization")
+    print("  --sharedmaterials       Copy materials into compile/Assetshared")
+    print("  --vpk                   Package each subfolder into VPK")
+    print("  --archive               Archive existing files instead of deletion")
+    print("  --game                  Compile directly to game directory\n")
+    print("VALVETEXTURE PIPELINE OPTIONS:")
+    print("  --forceupdate           Force reprocessing all textures")
+    print("  --allow_reprocess       Allow same file to be processed multiple times")
+    print("  --recursive             Search for files recursively\n")
+    print("EXAMPLES:")
+    print("  KitsuneResource.exe --config myconfig.json")
+    print("  KitsuneResource.exe --config myconfig.json --log --verbose")
+    print("  KitsuneResource.exe --config myconfig.json --game --vpk\n")
+    print("="*60)
+
 @timer
 def main():
     print_header()
+    
+    if len(sys.argv) == 1 or '--help' in sys.argv or '-h' in sys.argv:
+        display_help()
+        wait_for_keypress()
+        sys.exit(0)
     
     global_parser = argparse.ArgumentParser(
         description="Source Resource Compiler", 
@@ -536,7 +598,16 @@ def main():
     global_parser.add_argument("--dir", type=str,
                               help="Absolute path to override input/output root")
     
-    global_args, remaining_argv = global_parser.parse_known_args()
+    try:
+        global_args, remaining_argv = global_parser.parse_known_args()
+    except SystemExit:
+        print("\n" + "!"*60)
+        print("ERROR: Missing required argument --config")
+        print("!"*60)
+        print("\nThe --config argument is required to specify your configuration file.")
+        print("Run with --help to see all available options.")
+        wait_for_keypress()
+        sys.exit(1)
     
     log_file = None
     if global_args.log:
@@ -557,11 +628,13 @@ def main():
         config = parse_config_json(global_args.config)
     except (FileNotFoundError, ValueError) as e:
         logger.error(str(e))
+        wait_for_keypress()
         return logger
     
     header = config.get("header")
     if not header:
         logger.error("Missing 'header' field in config — cannot determine pipeline type")
+        wait_for_keypress()
         return logger
     
     parser = argparse.ArgumentParser(parents=[global_parser])
@@ -583,8 +656,13 @@ def main():
         parser.add_argument("--game", action="store_true",
                           help="Compile models directly to game directory (skips materials/data/VPK)")
         
-        args = parser.parse_args()
-        ValveModelPipeline(config, args, logger).execute()
+        try:
+            args = parser.parse_args()
+            ValveModelPipeline(config, args, logger).execute()
+        except Exception as e:
+            logger.error(f"Pipeline execution failed: {e}")
+            wait_for_keypress()
+            return logger
         
     elif header == 'ValveTexture':
         parser.add_argument("--forceupdate", action="store_true",
@@ -594,14 +672,30 @@ def main():
         parser.add_argument("--recursive", action="store_true",
                           help="Search for files recursively in subfolders")
         
-        args = parser.parse_args()
-        ValveTexturePipeline(config, args, logger).execute()
+        try:
+            args = parser.parse_args()
+            ValveTexturePipeline(config, args, logger).execute()
+        except Exception as e:
+            logger.error(f"Pipeline execution failed: {e}")
+            wait_for_keypress()
+            return logger
         
     else:
         logger.error(f"Unknown pipeline header: {header}")
+        wait_for_keypress()
         return logger
     
+    logger.info("Compilation complete!")
     return logger
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        print("\n\nOperation cancelled by user.")
+        wait_for_keypress()
+        sys.exit(1)
+    except Exception as e:
+        print(f"\n\nFATAL ERROR: {e}")
+        wait_for_keypress()
+        sys.exit(1)
