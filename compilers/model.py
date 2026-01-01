@@ -46,9 +46,10 @@ def model_compile_studiomdl(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            errors="replace",
             check=True
         )
-        stdout = result.stdout
+        stdout = result.stdout or ""
 
         _log_compiler_output(stdout, log, verbose)
         

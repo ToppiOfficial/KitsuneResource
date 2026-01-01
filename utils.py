@@ -5,7 +5,7 @@ from datetime import datetime
 from functools import wraps
 from typing import List, Optional
 
-SOFTVERSION = 1.0
+SOFTVERSION = 1.1
 SOFTVERSTATE = 'Release'
 DEFAULT_COMPILE_ROOT  = 'ExportedResource'
 
@@ -37,6 +37,8 @@ class Logger:
         self.verbose = verbose
         self.use_color = use_color
         self.log_file = log_file  # Path or None
+        self.warn_count = 0
+        self.error_count = 0
 
     def _write_to_file(self, text):
         if self.log_file:
@@ -50,6 +52,10 @@ class Logger:
     def _print(self, level, message):
         if level == "DEBUG" and not self.verbose:
             return
+        if level == "WARN":
+            self.warn_count += 1
+        elif level == "ERROR":
+            self.error_count += 1
         prefix = f"[{level}]"
         if self.use_color and level in self.COLOR:
             prefix = f"{self.COLOR[level]}{prefix}{self.COLOR['RESET']}"
@@ -128,6 +134,10 @@ def timer(func):
         finally:
             elapsed = time.time() - start_time
             if logger:
+                if logger.warn_count > 0 or logger.error_count > 0:
+                    logger.info("-" * 40)
+                    logger.info(f"Build finished with {logger.error_count} errors and {logger.warn_count} warnings.")
+                    logger.info("-" * 40)
                 logger.info(f"Total time elapsed: {elapsed:.2f} seconds")
             else:
                 print(f"[INFO] Total time elapsed: {elapsed:.2f} seconds")
@@ -232,4 +242,3 @@ def print_header():
     centered_extra = "\n".join(line.center(max_width) for line in extra_lines)
 
     print(ascii_art + centered_extra + "\n")
-
