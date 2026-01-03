@@ -20,7 +20,7 @@ def package_vpk(vpk_exe: Path, folder: Path, logger=None, verbose=False):
     cmd = [str(vpk_exe), str(folder)]
     if logger:
         vpk_logger = PrefixedLogger(logger, "VPK")
-        vpk_logger.info(f"Packaging folder: {folder}")
+        vpk_logger.debug(f"Packaging folder: {folder}")
 
     try:
         subprocess.run(

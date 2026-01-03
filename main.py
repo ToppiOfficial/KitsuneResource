@@ -15,16 +15,16 @@ from utils import (
     SUPPORTED_IMAGE_FORMAT
 )
 
-from compilers.materials import (
+from core.materials import (
     export_vtf, copy_materials, map_materials_to_vmt
 )
 
-from compilers.model import model_compile_studiomdl
-from compilers.gameinfo import get_game_search_paths
-from compilers.vpk import package_vpk
-from compilers.image import convert_image
-from compilers.qc import qc_read_materials
-from compilers.vmt import VMTCreator
+from core.model import model_compile_studiomdl
+from core.gameinfo import get_game_search_paths
+from core.vpk import package_vpk
+from core.image import convert_image
+from core.qc import qc_read_materials
+from core.vmt import VMTCreator
 
 class CompileFolderManager:
     """Manages compile folder cleanup and archiving"""
@@ -188,7 +188,7 @@ class ModelCompiler:
     """Handles model compilation and material processing"""
     
     def __init__(self, studiomdl_exe: Path, search_paths: List[Path], 
-                 vtfcmd_exe: Optional[Path], gameinfo_dir: Path, args, logger: Logger):
+                 vtfcmd_exe: Optional[Path], gameinfo_dir: Optional[Path], args, logger: Logger):
         self.studiomdl_exe = studiomdl_exe
         self.search_paths = search_paths
         self.vtfcmd_exe = vtfcmd_exe
@@ -347,11 +347,18 @@ class ValveModelPipeline:
             self.config, "studiomdl", "gameinfo", "vtfcmd", "vpk"
         )
         
-        if not studiomdl_exe or not gameinfo_path:
-            self.logger.error("Config missing required fields (studiomdl/gameinfo)")
+        if not studiomdl_exe:
+            self.logger.error("Config missing required field: studiomdl")
             return
         
-        gameinfo_dir = gameinfo_path.parent
+        gameinfo_dir = None
+        search_paths = []
+        if gameinfo_path:
+            gameinfo_dir = gameinfo_path.parent
+            search_paths = get_game_search_paths(gameinfo_path)
+        else:
+            self.logger.warn("No gameinfo provided. Shared materials and material collection will be limited.")
+
         compile_root = Path(self.args.exportdir or DEFAULT_COMPILE_ROOT).resolve()
         
         if self.args.exportdir is None:
@@ -359,15 +366,16 @@ class ValveModelPipeline:
         
         if self.args.game:
             self.logger.info("--game mode enabled: Compiling models directly to game directory")
-            self.logger.info(f"Game directory: {gameinfo_dir}")
+            if gameinfo_dir:
+                self.logger.info(f"Game directory: {gameinfo_dir}")
             self.logger.info("Materials, data sections, and VPK packaging will be skipped")
         else:
             CompileFolderManager.clean(compile_root, self.logger, self.args.archive)
         
-        search_paths = get_game_search_paths(gameinfo_path)
-        self.logger.info("Game search paths:")
-        for p in search_paths:
-            self.logger.info(f"\t{p}")
+        if search_paths:
+            self.logger.info("Game search paths:")
+            for p in search_paths:
+                self.logger.info(f"\t{p}")
         
         if vtfcmd_exe:
             self.logger.info(f"VTF conversion enabled: {vtfcmd_exe}")
@@ -387,7 +395,7 @@ class ValveModelPipeline:
     
     def _compile_models(self, compile_root: Path, studiomdl_exe: Path, 
                        search_paths: List[Path], vtfcmd_exe: Optional[Path], 
-                       gameinfo_dir: Path):
+                       gameinfo_dir: Optional[Path]):
         compiler = ModelCompiler(studiomdl_exe, search_paths, vtfcmd_exe, 
                                 gameinfo_dir, self.args, self.logger)
         
@@ -546,9 +554,6 @@ def wait_for_keypress():
 
 def display_help():
     """Display comprehensive help information"""
-    print("\n" + "="*60)
-    print("KITSUNERESOURCE")
-    print("="*60 + "\n")
     print("USAGE:")
     print("  KitsuneResource.exe --config <path> [options]\n")
     print("REQUIRED ARGUMENTS:")
@@ -573,7 +578,6 @@ def display_help():
     print("  KitsuneResource.exe --config myconfig.json")
     print("  KitsuneResource.exe --config myconfig.json --log --verbose")
     print("  KitsuneResource.exe --config myconfig.json --game --vpk\n")
-    print("="*60)
 
 @timer
 def main():

@@ -5,7 +5,7 @@ from datetime import datetime
 from functools import wraps
 from typing import List, Optional
 
-SOFTVERSION = 1.1
+SOFTVERSION = 1.2
 SOFTVERSTATE = 'Release'
 DEFAULT_COMPILE_ROOT  = 'ExportedResource'
 
@@ -56,11 +56,17 @@ class Logger:
             self.warn_count += 1
         elif level == "ERROR":
             self.error_count += 1
-        prefix = f"[{level}]"
-        if self.use_color and level in self.COLOR:
-            prefix = f"{self.COLOR[level]}{prefix}{self.COLOR['RESET']}"
+        
         timestamp = datetime.now().strftime("%H:%M:%S")
-        line = f"{timestamp} {prefix} {message}"
+        
+        if level == "INFO":
+            line = f"{timestamp} {message}"
+        else:
+            prefix = f"[{level}]"
+            if self.use_color and level in self.COLOR:
+                prefix = f"{self.COLOR[level]}{prefix}{self.COLOR['RESET']}"
+            line = f"{timestamp} {prefix} {message}"
+        
         print(line)
         self._write_to_file(line)
 

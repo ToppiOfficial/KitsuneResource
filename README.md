@@ -6,7 +6,7 @@ A Python-based pipeline for compiling and packaging Source Engine resources (mod
 
 ## Compatibility
 
-Windows 10+ & Python 3.10+
+Windows 10+ or Linux with Wine 9.0 for the executables & Python 3.10+
 
 ## Features
 

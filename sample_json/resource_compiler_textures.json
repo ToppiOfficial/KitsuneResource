@@ -19,32 +19,32 @@
         "diffuse": {
             "input": ".*[_-](d|color|rgb)\\.(psd|png|tga|jpg|dds)$",
             "vtf":{
-                "encoder_args": ["-format", "DXT1", "-alphaformat", "DXT5", "-rclampwidth", "2048", "-rclampheight", "2048"]
+                "encoder_args": ["-format", "DXT1", "-alphaformat", "DXT5", "-rclampwidth", "4096", "-rclampheight", "4096"]
             }
         },
         "normal": {
             "input": ".*[_-](n|normal)\\.(psd|png|tga|jpg|dds)$",
             "vtf": {
                 "flags": ["NORMAL"],
-                "encoder_args": ["-format", "DXT1", "-alphaformat", "DXT5", "-rclampwidth", "2048", "-rclampheight", "2048"]
+                "encoder_args": ["-format", "DXT1", "-alphaformat", "DXT5", "-rclampwidth", "4096", "-rclampheight", "4096"]
             }
         },
         "exponent": {
             "input": ".*(^|[_-])(e|exponent|phong)([_-].*)?\\.(psd|png|tga|jpg|dds)$",
             "vtf":{
-                "encoder_args": ["-format", "DXT1", "-alphaformat", "DXT5", "-rclampwidth", "2048", "-rclampheight", "2048"]
+                "encoder_args": ["-format", "DXT1", "-alphaformat", "DXT5", "-rclampwidth", "4096", "-rclampheight", "4096"]
             }
         },
         "mrao": {
             "input": ".*(^|[_-])mrao([_-].*)?\\.(psd|png|tga|jpg|dds)$",
             "vtf":{
-                "encoder_args": ["-format", "DXT1", "-alphaformat", "DXT5", "-rclampwidth", "2048", "-rclampheight", "2048"]
+                "encoder_args": ["-format", "DXT1", "-alphaformat", "DXT5", "-rclampwidth", "4096", "-rclampheight", "4096"]
             }
         },
         "emissive": {
             "input": ".*[_-]em(_flow|_base)?\\.(psd|png|tga|jpg|dds)$",
             "vtf": {
-                "encoder_args": ["-format", "DXT1", "-alphaformat", "DXT5", "-rclampwidth", "2048", "-rclampheight", "2048"]
+                "encoder_args": ["-format", "DXT1", "-alphaformat", "DXT5", "-rclampwidth", "4096", "-rclampheight", "4096"]
             }
         }
     }
