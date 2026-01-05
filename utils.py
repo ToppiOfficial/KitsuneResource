@@ -5,7 +5,7 @@ from datetime import datetime
 from functools import wraps
 from typing import List, Optional
 
-SOFTVERSION = 1.2
+SOFTVERSION = 1.3
 SOFTVERSTATE = 'Release'
 DEFAULT_COMPILE_ROOT  = 'ExportedResource'
 
@@ -26,10 +26,10 @@ class Logger:
     LEVELS = {"INFO": 1, "WARN": 2, "ERROR": 3, "DEBUG": 4}
 
     COLOR = {
-        "INFO": "\033[92m",   # green
-        "WARN": "\033[93m",   # yellow
-        "ERROR": "\033[91m",  # red
-        "DEBUG": "\033[94m",  # blue
+        "INFO": "\033[97m",    # bright white
+        "WARN": "\033[33m",    # orange/dark yellow
+        "ERROR": "\033[91m",   # red
+        "DEBUG": "\033[35m",   # purple/dark magenta
         "RESET": "\033[0m"
     }
 
@@ -79,17 +79,26 @@ class PrefixedLogger:
     """Logger wrapper to prepend a colored context prefix."""
     
     CONTEXT_COLOR = {
-    "MODEL": "\033[95m",     # magenta
-    "MATERIAL": "\033[96m",  # cyan
-    "DATA": "\033[93m",      # yellow
-    "VPK": "\033[94m",       # bright blue
-    "OS": "\033[92m",        # green (for filesystem operations)
+        "MODEL": "\033[95m",      # magenta
+        "MATERIAL": "\033[96m",   # cyan
+        "DATA": "\033[93m",       # yellow
+        "VPK": "\033[94m",        # blue
+        "OS": "\033[92m",         # green
+    }
+
+    CONTEXT_LABELS = {
+        "MODEL": "MDL",
+        "MATERIAL": "MAT",
+        "DATA": "DAT",
+        "VPK": "VPK",
+        "OS": "OS",
     }
 
     def __init__(self, base_logger, context):
         self.logger = base_logger
         self.context = context.upper()
-        self.prefix = f"[{self.context}]"
+        label = self.CONTEXT_LABELS.get(self.context, self.context)
+        self.prefix = f"[{label}]"
         if self.context in self.CONTEXT_COLOR:
             self.prefix = f"{self.CONTEXT_COLOR[self.context]}{self.prefix}\033[0m"
 

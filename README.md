@@ -8,45 +8,6 @@ A Python-based pipeline for compiling and packaging Source Engine resources (mod
 
 Windows 10+ or Linux with Wine 9.0 for the executables & Python 3.10+
 
-## Features
-
-### Model Compilation (ValveModel Pipeline)
-- Compile main QC and sub-QC files using StudioMDL
-- Support for multiple models per configuration
-- Automatic material discovery from QC files (`$cdmaterials`, `$texturegroup`, `$renamematerial`)
-- Material copying with optional localization
-- Patch shader support (VMT `include`, `replace`, `insert` blocks)
-- Direct game compilation mode (`--game`)
-
-### Material Management
-- Automatic material and texture copying
-- Material path localization for self-contained packages
-- Shared material folder support
-
-### Texture Processing (ValveTexture Pipeline)
-- Batch VTF conversion using VTFCmd
-- Pattern matching with regex support
-- Incremental updates (skip already-converted textures)
-- Recursive directory processing
-- Automatic VMT generation from templates
-- Customizable VTF flags and encoder settings
-
-### Data Handling
-- Copy scripts, configs, and other files
-- String replacement in text files (`.txt`, `.lua`, `.nut`, etc.)
-- Image format conversion
-- VTF export with customizable parameters
-
-### VPK Packaging
-- Optional VPK packaging for compiled folders
-- Silent operation unless verbose logging is enabled
-
-### Logging & Output
-- Detailed timestamped logs with colored prefixes (MODEL, MATERIAL, DATA, VPK)
-- Optional file logging
-- Verbose mode for debugging
-- Total elapsed time reporting
-
 ## Installation
 
 1. **Prerequisites:**
@@ -94,6 +55,7 @@ Refer to sample_json/ directory for example configurations
 | `--vpk` | Package each compiled subfolder into VPK |
 | `--archive` | Archive existing compile folder instead of deletion |
 | `--game` | Compile directly to game directory (skips materials/data/VPK) |
+| `--flatten-qc` | Flatten QC files before compilation (0: no temp files, 1: keep temp files) |
 
 ### ValveTexture Pipeline Options
 | Argument | Description |

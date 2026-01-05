@@ -23,7 +23,7 @@ from core.model import model_compile_studiomdl
 from core.gameinfo import get_game_search_paths
 from core.vpk import package_vpk
 from core.image import convert_image
-from core.qc import qc_read_materials
+from core.qc import qc_read_materials, flatten_qc
 from core.vmt import VMTCreator
 
 class CompileFolderManager:
@@ -215,17 +215,23 @@ class ModelCompiler:
         else:
             output_dir = compile_root / model_name
             output_dir.mkdir(parents=True, exist_ok=True)
-            game_dir = self.gameinfo_dir
+            game_dir = None
             model_logger.info(f"Compiling model {qc_path.name}")
         
-        success, compiled_files, dumped_materials = model_compile_studiomdl(
-            studiomdl_exe=self.studiomdl_exe,
-            qc_file=qc_path,
-            output_dir=output_dir,
-            game_dir=game_dir,
-            verbose=self.args.verbose,
-            logger=model_logger,
-        )
+        temp_qc = self._create_temp_qc(qc_path, model_logger)
+        
+        try:
+            success, compiled_files, dumped_materials = model_compile_studiomdl(
+                studiomdl_exe=self.studiomdl_exe,
+                qc_file=temp_qc,
+                output_dir=output_dir,
+                game_dir=game_dir,
+                verbose=self.args.verbose,
+                logger=model_logger,
+            )
+        finally:
+            if temp_qc != qc_path and self.args.flatten_qc == 0:
+                temp_qc.unlink()
         
         if not success:
             model_logger.error("Main QC compilation failed.")
@@ -234,7 +240,7 @@ class ModelCompiler:
         dumped_materials = set(dumped_materials)
         model_logger.info(f"Compiled {qc_path.name} ({len(dumped_materials)} materials)")
         
-        self._compile_submodels(model_data, qc_path, output_dir, dumped_materials, model_logger, game_dir=self.gameinfo_dir)
+        self._compile_submodels(model_data, qc_path, output_dir, dumped_materials, model_logger, game_dir=game_dir)
         
         if self.args.game:
             model_logger.info("--game mode: Skipping material copy and subdata processing")
@@ -243,8 +249,19 @@ class ModelCompiler:
         self._process_materials(qc_path, dumped_materials, output_dir, compile_root, model_logger)
         self._process_subdata(model_data, output_dir, compile_root)
     
+    def _create_temp_qc(self, qc_path: Path, logger: Logger) -> Path:
+        if self.args.flatten_qc is None:
+            return qc_path
+        
+        temp_qc = qc_path.parent / f"temp_{qc_path.name}"
+        qc_content = flatten_qc(qc_path, logger=logger)
+        with open(temp_qc, 'w', encoding='utf-8') as dst:
+            dst.write(qc_content)
+        logger.info(f"Flattened QC: {qc_path.name} to {temp_qc.name}")
+        return temp_qc
+    
     def _compile_submodels(self, model_data: dict, qc_path: Path, output_dir: Optional[Path],
-                          dumped_materials: Set, logger: Logger, game_dir : Path):
+                          dumped_materials: Set, logger: Logger, game_dir: Optional[Path]):
         for sub_name, sub_qc in model_data.get("submodels", {}).items():
             sub_qc_path = Path(sub_qc)
             if not sub_qc_path.is_absolute():
@@ -257,16 +274,20 @@ class ModelCompiler:
             
             logger.info(f"Compiling sub-QC: {sub_qc_path.name}")
             
-            game_dir = game_dir
+            temp_qc = self._create_temp_qc(sub_qc_path, logger)
             
-            success, _, sub_dumped = model_compile_studiomdl(
-                studiomdl_exe=self.studiomdl_exe,
-                qc_file=sub_qc_path,
-                output_dir=output_dir,
-                game_dir=game_dir,
-                verbose=self.args.verbose,
-                logger=logger,
-            )
+            try:
+                success, _, sub_dumped = model_compile_studiomdl(
+                    studiomdl_exe=self.studiomdl_exe,
+                    qc_file=temp_qc,
+                    output_dir=output_dir,
+                    game_dir=game_dir,
+                    verbose=self.args.verbose,
+                    logger=logger,
+                )
+            finally:
+                if temp_qc != qc_path and self.args.flatten_qc == 0:
+                    temp_qc.unlink()
             
             if success:
                 dumped_materials.update(set(sub_dumped))
@@ -351,6 +372,10 @@ class ValveModelPipeline:
             self.logger.error("Config missing required field: studiomdl")
             return
         
+        if self.args.game and not gameinfo_path:
+            self.logger.error("--game mode requires 'gameinfo' to be specified in config")
+            return
+        
         gameinfo_dir = None
         search_paths = []
         if gameinfo_path:
@@ -384,7 +409,7 @@ class ValveModelPipeline:
                            vtfcmd_exe, gameinfo_dir)
         
         if self.args.game:
-            self.logger.info("--game mode: Compilation complete. Skipping post-processing")
+            #self.logger.info("--game mode: Compilation complete. Skipping post-processing")
             return
         
         self._process_material_sets(compile_root, search_paths)
@@ -523,7 +548,7 @@ class ValveTexturePipeline:
         if not output_path.exists():
             return False
         
-        return output_path.stat().st_mtime >= src_file.stat().st_mtime
+        return output_path.stat().st_mtime == src_file.stat().st_mtime
     
     def _convert_to_vtf(self, src_file: Path, output_path: Path, 
                        entry: dict, vtfcmd: Path):
@@ -555,7 +580,7 @@ def wait_for_keypress():
 def display_help():
     """Display comprehensive help information"""
     print("USAGE:")
-    print("  KitsuneResource.exe --config <path> [options]\n")
+    print("  main.py --config <path> [options]\n")
     print("REQUIRED ARGUMENTS:")
     print("  --config CONFIG_JSON    Path to config.json file\n")
     print("GLOBAL OPTIONS:")
@@ -569,15 +594,16 @@ def display_help():
     print("  --sharedmaterials       Copy materials into compile/Assetshared")
     print("  --vpk                   Package each subfolder into VPK")
     print("  --archive               Archive existing files instead of deletion")
-    print("  --game                  Compile directly to game directory\n")
+    print("  --game                  Compile directly to game directory")
+    print("  --flatten-qc {0,1}      Flatten QC files before compilation (0: no temp files, 1: keep temp files)\n")
     print("VALVETEXTURE PIPELINE OPTIONS:")
     print("  --forceupdate           Force reprocessing all textures")
     print("  --allow_reprocess       Allow same file to be processed multiple times")
     print("  --recursive             Search for files recursively\n")
     print("EXAMPLES:")
-    print("  KitsuneResource.exe --config myconfig.json")
-    print("  KitsuneResource.exe --config myconfig.json --log --verbose")
-    print("  KitsuneResource.exe --config myconfig.json --game --vpk\n")
+    print("  main.py --config myconfig.json")
+    print("  main.py --config myconfig.json --log --verbose")
+    print("  main.py --config myconfig.json --game --vpk\n")
 
 @timer
 def main():
@@ -659,6 +685,8 @@ def main():
                           help="Archive existing files instead of deletion")
         parser.add_argument("--game", action="store_true",
                           help="Compile models directly to game directory (skips materials/data/VPK)")
+        parser.add_argument("--flatten-qc", type=int, choices=[0, 1],
+                          help="Flatten QC files before compilation (0: no temp files, 1: keep temp files)")
         
         try:
             args = parser.parse_args()
@@ -689,7 +717,7 @@ def main():
         wait_for_keypress()
         return logger
     
-    logger.info("Compilation complete!")
+    #logger.info("Compilation complete!")
     return logger
 
 if __name__ == "__main__":

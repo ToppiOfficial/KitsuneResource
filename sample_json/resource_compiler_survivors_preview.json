@@ -1,0 +1,12 @@
+{
+    "header" : "ValveModel",
+    "studiomdl": "D:/SteamLibrary/steamapps/common/Left 4 Dead 2/bin/nekomdl.exe",
+    "gameinfo": "D:/SteamLibrary/steamapps/common/Left 4 Dead 2/left4dead2/gameinfo.txt",
+    
+    "model": {
+        "Bill": {
+            "qc": "_preview.qc",
+            "compile": true
+        }
+    }
+}
