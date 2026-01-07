@@ -51,7 +51,8 @@ def model_compile_studiomdl(
         )
         stdout = result.stdout or ""
 
-        _log_compiler_output(stdout, log, verbose)
+        log.write_raw_to_log(stdout, source="studiomdl")
+        _log_compiler_output_to_console(stdout, log, verbose)
         
         moved_files = _move_compiled_files(stdout, output_dir, log)
         materials = _extract_materials(stdout, log)
@@ -60,21 +61,29 @@ def model_compile_studiomdl(
 
     except subprocess.CalledProcessError as e:
         log.error(f"Failed to compile {qc_file.name}")
-        _log_compiler_output(e.stdout, log, verbose)
-        _log_compiler_output(e.stderr, log, verbose, is_stderr=True)
+        
+        if e.stdout:
+            log.write_raw_to_log(e.stdout, source="studiomdl STDOUT")
+            _log_compiler_output_to_console(e.stdout, log, True)
+        if e.stderr:
+            log.write_raw_to_log(e.stderr, source="studiomdl STDERR")
+            _log_compiler_output_to_console(e.stderr, log, True, is_stderr=True)
         return False, [], []
 
     except Exception as e:
         log.error(f"Unexpected exception compiling {qc_file.name}: {e}")
         return False, [], []
 
-def _log_compiler_output(output: str, log: Logger, verbose: bool, is_stderr: bool = False):
-    """Log compiler output, always showing warnings, errors, and important messages."""
+def _log_compiler_output_to_console(output: str, log: Logger, verbose: bool, is_stderr: bool = False):
+    """Log compiler output to CONSOLE ONLY, always showing warnings, errors, and important messages."""
     if not output:
         return
 
     if verbose:
-        log.debug(output)
+        if is_stderr:
+            log.error_console(output)
+        else:
+            log.debug_console(output)
         return
 
     ORANGE = "\033[38;5;208m"
@@ -89,11 +98,11 @@ def _log_compiler_output(output: str, log: Logger, verbose: bool, is_stderr: boo
             continue
 
         if any(keyword in line_lower for keyword in ["error", "failed", "cannot", "missing"]):
-            log.error(line_stripped)
+            log.error_console(line_stripped)
         elif "warn" in line_lower:
-            log.warn(line_stripped)
+            log.warn_console(line_stripped)
         elif line_stripped.startswith("$"):
-            log.info(f"{ORANGE}{line_stripped}{RESET}")
+            log.info_console(f"{ORANGE}{line_stripped}{RESET}")
 
 def _move_compiled_files(stdout: str, output_dir: Path | None, log: Logger) -> list[Path]:
     """Extract and move compiled model files to output directory."""

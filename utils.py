@@ -1,11 +1,11 @@
 # utils.py
-import json, time
+import json, time, re
 from pathlib import Path
 from datetime import datetime
 from functools import wraps
 from typing import List, Optional
 
-SOFTVERSION = 1.31
+SOFTVERSION = 1.32
 DEFAULT_COMPILE_ROOT  = 'ExportedResource'
 
 SUPPORTED_TEXT_FORMAT = (
@@ -17,6 +17,16 @@ SUPPORTED_IMAGE_FORMAT = (
     '.jpg', '.jpeg', '.gif', '.psd', '.png', '.tiff', '.tga', '.bmp', 
     '.dds', '.hdr', '.exr', '.ico', '.webp', '.svg', '.apng', '.mks'
 )
+
+TEXTURE_KEYS = {
+    "$basetexture", "$basetexture2", "$bumpmap", "$bumpmap2", "$normaltexture",
+    "$lightwarptexture", "$phongexponenttexture", "$normalmap", "$emissiveblendbasetexture",
+    "$emissiveblendtexture", "$emissiveblendflowtexture", "$ssbump", "$envmapmask",
+    "$detail", "$detail2", "$blendmodulatetexture", "$AmbientOcclTexture", "$CorneaTexture",
+    "$envmap", "$phongwarptexture", "$selfillummask", "$selfillumtexture", "$detail1",
+    "$iris", "$mraotexture", "$paintsplatnormalmap", "$paintsplatbubblelayout",
+    "$paintsplatbubble", "$paintenvmap", "$emissiontexture", "$emissiontexture2",
+}
 
 class Logger:
     """
@@ -31,6 +41,8 @@ class Logger:
         "DEBUG": "\033[35m",   # purple/dark magenta
         "RESET": "\033[0m"
     }
+
+    _ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 
     def __init__(self, verbose=False, use_color=True, log_file=None):
         self.verbose = verbose
@@ -48,31 +60,52 @@ class Logger:
                 # Fail silently on logging errors to avoid crashing main program
                 pass
 
-    def _print(self, level, message):
-        if level == "DEBUG" and not self.verbose:
-            return
+    def _print(self, level, message, console_only=False):
         if level == "WARN":
             self.warn_count += 1
         elif level == "ERROR":
             self.error_count += 1
-        
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        
-        if level == "INFO":
-            line = f"{timestamp} {message}"
-        else:
-            prefix = f"[{level}]"
-            if self.use_color and level in self.COLOR:
-                prefix = f"{self.COLOR[level]}{prefix}{self.COLOR['RESET']}"
-            line = f"{timestamp} {prefix} {message}"
-        
-        print(line)
-        self._write_to_file(line)
+
+        now = datetime.now()
+
+        # Console Logging
+        if self.verbose or level != "DEBUG":
+            timestamp_console = now.strftime("%H:%M:%S")
+            if level == "INFO":
+                console_line = f"{timestamp_console} | {message}"
+            else:
+                prefix = f"[{level}]"
+                if self.use_color and level in self.COLOR:
+                    prefix = f"{self.COLOR[level]}{prefix}{self.COLOR['RESET']}"
+                console_line = f"{timestamp_console} | {prefix} {message}"
+            print(console_line)
+
+        # File Logging
+        if self.log_file and not console_only:
+            clean_message = self._ansi_escape.sub('', message)
+            timestamp_file = now.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+            file_line = f"{timestamp_file}\t[{level.upper()}] {clean_message}"
+            self._write_to_file(file_line)
 
     def info(self, message):  self._print("INFO", message)
     def warn(self, message):  self._print("WARN", message)
     def error(self, message): self._print("ERROR", message)
     def debug(self, message): self._print("DEBUG", message)
+
+    def write_raw_to_log(self, data, source="Generic"):
+        if self.log_file:
+            clean_data = self._ansi_escape.sub('', data)
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+            header = f"--- BEGIN {source} OUTPUT"
+            footer = f"--- END {source} OUTPUT"
+            full_log = f"{timestamp}\t{header}\n{clean_data}\n{timestamp}\t{footer}"
+            self._write_to_file(full_log)
+        
+    def info_console(self, message): self._print("INFO", message, console_only=True)
+    def warn_console(self, message): self._print("WARN", message, console_only=True)
+    def error_console(self, message): self._print("ERROR", message, console_only=True)
+    def debug_console(self, message): self._print("DEBUG", message, console_only=True)
+
         
 class PrefixedLogger:
     """Logger wrapper to prepend a colored context prefix."""
@@ -113,6 +146,21 @@ class PrefixedLogger:
     def debug(self, msg):
         self.logger.debug(f"{self.prefix} {msg}")
 
+    def write_raw_to_log(self, data, source="Generic"):
+        self.logger.write_raw_to_log(data, source=f"{self.context}/{source}")
+        
+    def info_console(self, msg):
+        self.logger.info_console(f"{self.prefix} {msg}")
+
+    def warn_console(self, msg):
+        self.logger.warn_console(f"{self.prefix} {msg}")
+
+    def error_console(self, msg):
+        self.logger.error_console(f"{self.prefix} {msg}")
+
+    def debug_console(self, msg):
+        self.logger.debug_console(f"{self.prefix} {msg}")
+
 class PathResolver:
     """Handles path resolution and validation"""
     
@@ -148,13 +196,14 @@ def timer(func):
         finally:
             elapsed = time.time() - start_time
             if logger:
+                logger.info('')
+                logger.info("-" * 54)
                 if logger.warn_count > 0 or logger.error_count > 0:
-                    logger.info("-" * 40)
                     logger.info(f"Build finished with {logger.error_count} errors and {logger.warn_count} warnings.")
-                    logger.info("-" * 40)
                 logger.info(f"Total time elapsed: {elapsed:.2f} seconds")
+                logger.info("-" * 54)
             else:
-                print(f"[INFO] Total time elapsed: {elapsed:.2f} seconds")
+                print(f"Total time elapsed: {elapsed:.2f} seconds")
         return logger
     return wrapper
 

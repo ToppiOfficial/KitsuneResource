@@ -398,9 +398,12 @@ class ValveModelPipeline:
             CompileFolderManager.clean(compile_root, self.logger, self.args.archive)
         
         if search_paths:
+            self.logger.info("")
             self.logger.info("Game search paths:")
             for p in search_paths:
                 self.logger.info(f"\t{p}")
+                
+            self.logger.info('')
         
         if vtfcmd_exe:
             self.logger.info(f"VTF conversion enabled: {vtfcmd_exe}")
@@ -584,7 +587,7 @@ def display_help():
     print("REQUIRED ARGUMENTS:")
     print("  --config CONFIG_JSON    Path to config.json file\n")
     print("GLOBAL OPTIONS:")
-    print("  --log                   Enable logging to file")
+    print("  --log <dir (optional)>  Enable logging to file")
     print("  --verbose               Enable verbose logging")
     print("  --dir PATH              Override input/output root directory\n")
     print("VALVEMODEL PIPELINE OPTIONS:")
@@ -621,8 +624,10 @@ def main():
     global_parser.add_argument("--config", "-config", required=True, 
                               metavar="CONFIG_JSON",
                               help="Path to config.json file")
-    global_parser.add_argument("--log", action="store_true",
-                              help="Enable logging to file")
+    global_parser.add_argument("--log", nargs='?', const="kitsune_log", default=None,
+                              metavar="LOG_DIR",
+                              help="Enable logging to file. Defaults to './kitsun_log'. "
+                                   "Optionally provide a relative or absolute directory.")
     global_parser.add_argument("--verbose", action="store_true", 
                               help="Enable verbose logging")
     global_parser.add_argument("--dir", type=str,
@@ -641,14 +646,11 @@ def main():
     
     log_file = None
     if global_args.log:
-        clean_dir = str(global_args.dir).strip(' "\'') if global_args.dir else None
-        config_dir = (Path(clean_dir).resolve() if clean_dir 
-                     else Path(global_args.config).resolve().parent)
+        log_dir = Path(global_args.log).resolve()
         
-        log_dir = config_dir / "resourcecompiler-log"
         log_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        log_file = log_dir / f"resourcecompiler-{timestamp}.txt"
+        log_file = log_dir / f"kitsune_log_{timestamp}.txt"
     
     logger = Logger(verbose=global_args.verbose, use_color=True, log_file=log_file)
     if log_file:

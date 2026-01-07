@@ -42,7 +42,7 @@ Refer to sample_json/ directory for example configurations
 |----------|-------------|
 | `--config` | **(Required)** Path to JSON configuration file |
 | `--dir` | Override input/output root directory |
-| `--log` | Enable logging to timestamped file in `resourcecompiler-log/` |
+| `--log <path (Optional)>` | Enable logging to timestamped file in `kitsune_log/` |
 | `--verbose` | Enable verbose output for debugging |
 
 ### ValveModel Pipeline Options

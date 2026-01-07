@@ -3,17 +3,9 @@ import re
 import shutil
 import subprocess
 from typing import Dict, List, Optional, Set, Tuple
-from utils import Logger
-
-TEXTURE_KEYS = {
-    "$basetexture", "$basetexture2", "$bumpmap", "$bumpmap2", "$normaltexture",
-    "$lightwarptexture", "$phongexponenttexture", "$normalmap", "$emissiveblendbasetexture",
-    "$emissiveblendtexture", "$emissiveblendflowtexture", "$ssbump", "$envmapmask",
-    "$detail", "$detail2", "$blendmodulatetexture", "$AmbientOcclTexture", "$CorneaTexture",
-    "$envmap", "$phongwarptexture", "$selfillummask", "$selfillumtexture", "$detail1",
-    "$iris", "$mraotexture", "$paintsplatnormalmap", "$paintsplatbubblelayout",
-    "$paintsplatbubble", "$paintenvmap", "$emissiontexture", "$emissiontexture2",
-}
+from utils import (
+    Logger, TEXTURE_KEYS
+)
 
 def find_material_vmt(material_name: str, search_paths: List[Path]) -> Optional[Path]:
     relative_vmt = Path("materials") / Path(material_name + ".vmt")
@@ -31,10 +23,11 @@ def map_materials_to_vmt(materials_list: List[str], search_paths: List[Path]) ->
             result[mat] = vmt
     return result
 
-def parse_vmt_structure(vmt_path: Path) -> dict:
+def parse_vmt_structure(vmt_path: Path, logger: Optional[Logger] = None) -> dict:
     if not vmt_path.exists():
         return {"is_patch": False, "textures": {}}
     
+    logger and logger.debug(f"Parsing VMT: {vmt_path}")
     with open(vmt_path, "r", encoding="utf-8", errors="ignore") as f:
         content = f.read()
     
@@ -49,6 +42,7 @@ def parse_vmt_structure(vmt_path: Path) -> dict:
             break
     
     is_patch = first_line.lower() == "patch"
+    logger and logger.debug(f"VMT is_patch: {is_patch}")
     include_path = None
     replace_textures = {}
     insert_textures = {}
@@ -58,6 +52,7 @@ def parse_vmt_structure(vmt_path: Path) -> dict:
         include_match = re.search(r'include\s+"([^"]+)"', content, flags=re.IGNORECASE)
         if include_match:
             include_path = include_match.group(1).replace("\\", "/")
+            logger and logger.debug(f"Found include path: {include_path}")
         
         replace_match = re.search(r'replace\s*\{([^}]*)\}', content, flags=re.IGNORECASE | re.DOTALL)
         if replace_match:
@@ -67,7 +62,8 @@ def parse_vmt_structure(vmt_path: Path) -> dict:
                 key_lower = key.lower()
                 if key_lower in lowercase_keys:
                     replace_textures[key_lower] = Path(value.replace("\\", "/"))
-        
+            logger and logger.debug(f"Found replace textures: {replace_textures}")
+
         insert_match = re.search(r'insert\s*\{([^}]*)\}', content, flags=re.IGNORECASE | re.DOTALL)
         if insert_match:
             block_content = insert_match.group(1)
@@ -76,6 +72,8 @@ def parse_vmt_structure(vmt_path: Path) -> dict:
                 key_lower = key.lower()
                 if key_lower in lowercase_keys:
                     insert_textures[key_lower] = Path(value.replace("\\", "/"))
+            logger and logger.debug(f"Found insert textures: {insert_textures}")
+
     else:
         for line in lines:
             stripped = line.strip()
@@ -88,6 +86,7 @@ def parse_vmt_structure(vmt_path: Path) -> dict:
                 key_lower = key.lower()
                 if key_lower in lowercase_keys:
                     regular_textures[key_lower] = Path(value.replace("\\", "/"))
+        logger and logger.debug(f"Found regular textures: {regular_textures}")
     
     return {
         "is_patch": is_patch,
@@ -97,8 +96,8 @@ def parse_vmt_structure(vmt_path: Path) -> dict:
         "textures": regular_textures
     }
 
-def parse_vmt_textures(vmt_path: Path) -> Dict[str, Path]:
-    structure = parse_vmt_structure(vmt_path)
+def parse_vmt_textures(vmt_path: Path, logger: Optional[Logger] = None) -> Dict[str, Path]:
+    structure = parse_vmt_structure(vmt_path, logger)
     if structure["is_patch"]:
         all_textures = {}
         all_textures.update(structure["replace_textures"])
@@ -157,7 +156,7 @@ class VMTProcessor:
     def __init__(self, ctx: MaterialCopyContext):
         self.ctx = ctx
     
-    def process_vmt(self, vmt_path: Path, dest_vmt: Optional[Path] = None, nosubfolder: bool = False) -> Tuple[Dict[str, Path], Optional[Path]]:
+    def process_vmt(self, vmt_path: Path, dest_vmt: Optional[Path] = None, nosubfolder: bool = False, copy_textures: bool = True) -> Tuple[Dict[str, Path], Optional[Path]]:
         if vmt_path in self.ctx.processed_vmts:
             self.ctx.logger and self.ctx.logger.debug(f"Skipping already processed VMT: {vmt_path}")
             return {}, self.ctx.processed_vmts[vmt_path]
@@ -170,12 +169,13 @@ class VMTProcessor:
         self.ctx.processed_vmts[vmt_path] = dest_vmt
         
         self._copy_vmt_file(vmt_path, dest_vmt)
-        structure = parse_vmt_structure(vmt_path)
+        structure = parse_vmt_structure(vmt_path, self.ctx.logger)
         
         included_textures, included_vmt_dest = self._process_include(structure, dest_vmt, nosubfolder)
         final_textures = self._merge_textures(structure, included_textures)
         
-        self._copy_referenced_textures(final_textures, dest_vmt, nosubfolder)
+        if copy_textures:
+            self._copy_referenced_textures(final_textures, dest_vmt, nosubfolder)
         
         if self.ctx.localize_data:
             self._rewrite_vmt_paths(vmt_path, dest_vmt, structure, included_vmt_dest, final_textures)
@@ -199,11 +199,12 @@ class VMTProcessor:
                 self.ctx.logger and self.ctx.logger.debug(f"Found included VMT: {candidate}")
                 included_vmt_dest = (dest_vmt.parent / "shared" / candidate.name 
                                    if self.ctx.localize_data else None)
-                included_textures, _ = self.process_vmt(candidate, included_vmt_dest, nosubfolder=True)
+                included_textures, _ = self.process_vmt(candidate, included_vmt_dest, nosubfolder=True, copy_textures=False)
                 return included_textures, included_vmt_dest
         return {}, None
     
     def _merge_textures(self, structure: dict, included_textures: Dict[str, Path]) -> Dict[str, Path]:
+        self.ctx.logger and self.ctx.logger.debug(f"Merging textures. Included: {included_textures}, Current: {structure}")
         final_textures = {**included_textures}
         final_textures.update(structure.get("insert_textures", {}))
         final_textures.update(structure.get("replace_textures", {}))
@@ -211,6 +212,7 @@ class VMTProcessor:
         if not structure["is_patch"]:
             final_textures.update(structure.get("textures", {}))
         
+        self.ctx.logger and self.ctx.logger.debug(f"Final merged textures: {final_textures}")
         return final_textures
     
     def _copy_referenced_textures(self, textures: Dict[str, Path], dest_vmt: Path, nosubfolder: bool):
@@ -245,8 +247,15 @@ class VMTPathRewriter:
         self.structure = structure
         self.included_vmt_dest = included_vmt_dest
         self.textures = textures
-    
+        self.ctx.logger and self.ctx.logger.debug(
+            f"VMTPathRewriter initialized for {dest_vmt.name}:\n"
+            f"  structure: {structure}\n"
+            f"  included_vmt_dest: {included_vmt_dest}\n"
+            f"  textures: {textures}"
+        )
+
     def rewrite_line(self, line: str) -> str:
+        self.ctx.logger and self.ctx.logger.debug(f"Rewriting line: {line.strip()}")
         if self._should_rewrite_include(line):
             return self._rewrite_include_line(line)
         
