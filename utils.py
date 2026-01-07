@@ -5,8 +5,7 @@ from datetime import datetime
 from functools import wraps
 from typing import List, Optional
 
-SOFTVERSION = 1.3
-SOFTVERSTATE = 'Release'
+SOFTVERSION = 1.31
 DEFAULT_COMPILE_ROOT  = 'ExportedResource'
 
 SUPPORTED_TEXT_FORMAT = (
@@ -250,7 +249,7 @@ def print_header():
     max_width = max(len(line) for line in art_lines)
 
     extra_lines = [
-        f"KitsuneResource {SOFTVERSTATE} {SOFTVERSION}",
+        f"KitsuneResource {SOFTVERSION}",
         "by Toppi"
     ]
 
