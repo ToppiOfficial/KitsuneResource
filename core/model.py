@@ -64,10 +64,10 @@ def model_compile_studiomdl(
         
         if e.stdout:
             log.write_raw_to_log(e.stdout, source="studiomdl STDOUT")
-            _log_compiler_output_to_console(e.stdout, log, True)
+            _log_compiler_output_to_console(e.stdout, log, verbose)
         if e.stderr:
             log.write_raw_to_log(e.stderr, source="studiomdl STDERR")
-            _log_compiler_output_to_console(e.stderr, log, True, is_stderr=True)
+            _log_compiler_output_to_console(e.stderr, log, verbose, is_stderr=True)
         return False, [], []
 
     except Exception as e:
@@ -91,13 +91,14 @@ def _log_compiler_output_to_console(output: str, log: Logger, verbose: bool, is_
     RESET = "\033[0m"
 
     for line in output.splitlines():
-        line_lower = line.lower()
         line_stripped = line.strip()
         
         if not line_stripped:
             continue
 
-        if any(keyword in line_lower for keyword in ["error", "failed", "cannot", "missing"]):
+        line_lower = line_stripped.lower()
+
+        if "error" in line_lower or any(keyword in line_lower for keyword in ["failed", "cannot", "missing", "aborted"]):
             log.error_console(line_stripped)
         elif "warn" in line_lower:
             log.warn_console(line_stripped)
