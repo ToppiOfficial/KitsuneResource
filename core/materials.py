@@ -256,6 +256,11 @@ class VMTPathRewriter:
 
     def rewrite_line(self, line: str) -> str:
         self.ctx.logger and self.ctx.logger.debug(f"Rewriting line: {line.strip()}")
+        
+        stripped = line.strip()
+        if stripped.startswith("//"):
+            return line
+
         if self._should_rewrite_include(line):
             return self._rewrite_include_line(line)
         
