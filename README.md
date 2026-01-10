@@ -82,6 +82,13 @@ Refer to sample_json/ directory for example configurations
       "submodels": {
         "phymodel": "models/mymodel/phymodel.qc"
       },
+      "definevariable": {
+        "SHARED_PATH": "models/shared",
+        "SpecificVar": {
+          "value": "custom_value",
+          "targets": ["phymodel"]
+        }
+      },
       "subdata": [
         {
           "input": "textures/custom.tga",

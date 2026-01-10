@@ -5,7 +5,7 @@ from datetime import datetime
 from functools import wraps
 from typing import List, Optional
 
-SOFTVERSION = 1.34
+SOFTVERSION = 1.4
 DEFAULT_COMPILE_ROOT  = 'ExportedResource'
 
 SUPPORTED_TEXT_FORMAT = (
@@ -249,6 +249,13 @@ def parse_config_json(config_path: str, seen_paths=None, filter_keys=None) -> di
         filter_keys: Optional list of keys to exclude from included JSONs.
                      By default we exclude "include" itself to prevent infinite recursion.
     """
+    def first_key_hook(pairs):
+        d = {}
+        for key, value in pairs:
+            if key not in d:
+                d[key] = value
+        return d
+        
     if seen_paths is None:
         seen_paths = set()
     if filter_keys is None:
@@ -263,7 +270,7 @@ def parse_config_json(config_path: str, seen_paths=None, filter_keys=None) -> di
         raise FileNotFoundError(f"Config file not found: {config_path}")
 
     with config_path.open("r", encoding="utf-8") as f:
-        config = json.load(f)
+        config = json.load(f, object_pairs_hook=first_key_hook)
 
     includes = config.get("include")
     if includes:

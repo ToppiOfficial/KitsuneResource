@@ -70,6 +70,7 @@ class QCProcessor:
         self.logger : PrefixedLogger = logger
         self.if_stack = []
         self.output_lines = []
+        self.json_vars = set(self.variables.keys())
         self.defined_vars = set(self.variables.keys())
         self.macro_args_override = macro_args_override if macro_args_override is not None else {}
         
@@ -204,7 +205,7 @@ class QCProcessor:
         
         return False
     
-    def _handle_define_variable(self, command_parts: list, line_num: int, line: str) -> None:
+    def _handle_define_variable(self, command_parts: list, line_num: int, line: str) -> Optional[str]:
         try:
             if len(command_parts) == 3:
                 _, var_name, var_value = command_parts
@@ -213,22 +214,26 @@ class QCProcessor:
                     if self.logger:
                         warning_msg = f"{self.ORANGE}WARNING Line {line_num}: Cannot define variable '{var_name}' - shadowed by macro argument{self.RESET}"
                         self.logger.error(warning_msg)
-                    self.output_lines.append(f"// WARNING Line {line_num}: Variable '{var_name}' shadowed by macro argument, ignoring\n")
-                elif var_name in self.defined_vars:
+                    return f"// WARNING Line {line_num}: Variable '{var_name}' shadowed by macro argument, ignoring\n"
+
+                if var_name in self.json_vars:
+                    return f"// Overridden by JSON config: {line}\n"
+
+                if var_name in self.defined_vars:
                     if self.logger:
                         warning_msg = f"{self.ORANGE}WARNING Line {line_num}: Variable '{var_name}' already defined, ignoring redefinition{self.RESET}"
                         self.logger.error(warning_msg)
-                    self.output_lines.append(f"// WARNING Line {line_num}: Variable '{var_name}' already defined, ignoring\n")
+                    return f"// WARNING Line {line_num}: Variable '{var_name}' already defined, ignoring\n"
                 else:
                     self.variables[var_name] = var_value
                     self.defined_vars.add(var_name)
+                    return None
             else:
-                self.output_lines.append(f"// WARNING Line {line_num}: Malformed $definevariable: {line}\n")
+                return f"// WARNING Line {line_num}: Malformed $definevariable: {line}\n"
         except Exception as e:
-            self.output_lines.append(f"// WARNING Line {line_num}: Failed to parse $definevariable: {line} ({e})\n")
-        return None
+            return f"// WARNING Line {line_num}: Failed to parse $definevariable: {line} ({e})\n"
     
-    def _handle_redefine_variable(self, command_parts: list, line_num: int, line: str) -> None:
+    def _handle_redefine_variable(self, command_parts: list, line_num: int, line: str) -> Optional[str]:
         try:
             if len(command_parts) == 3:
                 _, var_name, var_value = command_parts
@@ -237,22 +242,22 @@ class QCProcessor:
                     if self.logger:
                         error_msg = f"{self.RED}ERROR Line {line_num}: Cannot redefine macro argument '{var_name}'{self.RESET}"
                         self.logger.error(error_msg)
-                    self.output_lines.append(f"// ERROR Line {line_num}: Cannot redefine macro argument '{var_name}'\n")
+                    return f"// ERROR Line {line_num}: Cannot redefine macro argument '{var_name}'\n"
                 elif var_name not in self.defined_vars:
                     if self.logger:
                         error_msg = f"{self.RED}ERROR Line {line_num}: Cannot redefine undefined variable '{var_name}'{self.RESET}"
                         self.logger.error(error_msg)
-                    self.output_lines.append(f"// ERROR Line {line_num}: Cannot redefine undefined variable '{var_name}'\n")
+                    return f"// ERROR Line {line_num}: Cannot redefine undefined variable '{var_name}'\n"
                 else:
                     self.variables[var_name] = var_value
                     if self.logger:
                         info_msg = f"{self.ORANGE}INFO Line {line_num}: Variable '{var_name}' redefined to '{var_value}'{self.RESET}"
                         self.logger.info(info_msg)
+                    return None
             else:
-                self.output_lines.append(f"// WARNING Line {line_num}: Malformed $redefinevariable: {line}\n")
+                return f"// WARNING Line {line_num}: Malformed $redefinevariable: {line}\n"
         except Exception as e:
-            self.output_lines.append(f"// WARNING Line {line_num}: Failed to parse $redefinevariable: {line} ({e})\n")
-        return None
+            return f"// WARNING Line {line_num}: Failed to parse $redefinevariable: {line} ({e})\n"
     
     def _handle_include(self, original_line: str, command_parts: list, line_num: int, base_dir: Path, include_stack: set, processed_line: str) -> str:
         try:
@@ -323,7 +328,17 @@ def flatten_qc(qc_path: Path, _include_stack: set = None, _variables: dict = Non
         _macros = {}
     if _defined_vars is None:
         _defined_vars = set(_variables.keys())
-    
+
+    header = ""
+    if _variables and not _include_stack: # Only add header for the root file
+        for key, value in _variables.items():
+            if isinstance(value, str):
+                header += f'$definevariable "{key}" "{value}"\n'
+            else:
+                header += f'$definevariable "{key}" {value}\n'
+        if header:
+            header += '\n'
+
     try:
         resolved_path = qc_path.resolve(strict=True)
     except FileNotFoundError:
@@ -395,7 +410,7 @@ def flatten_qc(qc_path: Path, _include_stack: set = None, _variables: dict = Non
     output_lines.extend(processor.output_lines)
     _include_stack.remove(resolved_path)
     
-    return "".join(output_lines)
+    return header + "".join(output_lines)
 
 def qc_read_includes(qc_path: Path) -> list[Path]:
     if not qc_path.exists():

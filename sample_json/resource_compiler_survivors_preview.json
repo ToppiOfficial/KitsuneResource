@@ -2,10 +2,15 @@
     "header" : "ValveModel",
     "studiomdl": "D:/SteamLibrary/steamapps/common/Left 4 Dead 2/bin/nekomdl.exe",
     "gameinfo": "D:/SteamLibrary/steamapps/common/Left 4 Dead 2/left4dead2/gameinfo.txt",
-    
+    "definevariable": {
+        "RigtoSurvivorAnim": "zoey"
+    },
     "model": {
-        "Bill": {
+        "PreviewModel": {
             "qc": "_preview.qc",
+            "definevariable" : {
+                "survivorName": {"value": "bill"}
+            },
             "compile": true
         }
     }

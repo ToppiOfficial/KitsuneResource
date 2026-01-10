@@ -196,7 +196,7 @@ class ModelCompiler:
         self.args = args
         self.logger = logger
     
-    def compile_model(self, model_name: str, model_data: dict, compile_root: Path):
+    def compile_model(self, model_name: str, model_data: dict, compile_root: Path, global_vars: dict = None):
         model_logger = PrefixedLogger(self.logger, "MODEL")
         
         if not model_data.get('compile', True):
@@ -218,7 +218,37 @@ class ModelCompiler:
             game_dir = None
             model_logger.info(f"Compiling model {qc_path.name}")
         
-        temp_qc = self._create_temp_qc(qc_path, model_logger)
+        model_define_vars = model_data.get("definevariable", {})
+        if global_vars is None:
+            global_vars = {}
+
+        regular_model_defines = {}
+        targeted_model_defines = {}
+
+        for name, value in model_define_vars.items():
+            # Check for the new "targets" key for specific variable application
+            if isinstance(value, dict) and 'targets' in value and 'value' in value:
+                # Targeted define
+                for target_name in value['targets']:
+                    if target_name not in targeted_model_defines:
+                        targeted_model_defines[target_name] = {}
+                    targeted_model_defines[target_name][name] = value['value']
+            elif isinstance(value, dict) and 'value' in value:
+                # Regular define with value wrapper
+                regular_model_defines[name] = value['value']
+            else:
+                # Regular define, applies to all
+                regular_model_defines[name] = value
+
+        # Variables for the main model
+        main_model_defines = global_vars.copy()
+        main_model_defines.update(regular_model_defines)
+
+        # Apply variables targeted specifically to the main QC
+        if "qc" in targeted_model_defines:
+            main_model_defines.update(targeted_model_defines["qc"])
+
+        temp_qc = self._create_temp_qc(qc_path, model_logger, base_name=model_name, variables=main_model_defines)
         
         try:
             success, compiled_files, dumped_materials = model_compile_studiomdl(
@@ -240,7 +270,7 @@ class ModelCompiler:
         dumped_materials = set(dumped_materials)
         model_logger.info(f"Compiled {qc_path.name} ({len(dumped_materials)} materials)")
         
-        self._compile_submodels(model_data, qc_path, output_dir, dumped_materials, model_logger, game_dir=game_dir)
+        self._compile_submodels(model_data, qc_path, output_dir, dumped_materials, model_logger, game_dir=game_dir, global_vars=global_vars, regular_model_vars=regular_model_defines, targeted_model_vars=targeted_model_defines, model_name=model_name)
         
         if self.args.game:
             model_logger.info("--game mode: Skipping material copy and subdata processing")
@@ -249,32 +279,42 @@ class ModelCompiler:
         self._process_materials(qc_path, dumped_materials, output_dir, compile_root, model_logger)
         self._process_subdata(model_data, output_dir, compile_root)
     
-    def _create_temp_qc(self, qc_path: Path, logger: Logger) -> Path:
+    def _create_temp_qc(self, qc_path: Path, logger: Logger, base_name: str, variables: dict = None) -> Path:
         if self.args.flatten_qc is None:
             return qc_path
         
-        temp_qc = qc_path.parent / f"temp_{qc_path.name}"
-        qc_content = flatten_qc(qc_path, logger=logger)
+        temp_qc_name = f"temp_{base_name}.qc"
+        temp_qc = qc_path.parent / temp_qc_name
+        qc_content = flatten_qc(qc_path, logger=logger, _variables=variables)
         with open(temp_qc, 'w', encoding='utf-8') as dst:
             dst.write(qc_content)
         logger.info(f"Flattened QC: {qc_path.name} to {temp_qc.name}")
         return temp_qc
     
     def _compile_submodels(self, model_data: dict, qc_path: Path, output_dir: Optional[Path],
-                          dumped_materials: Set, logger: Logger, game_dir: Optional[Path]):
-        for sub_name, sub_qc in model_data.get("submodels", {}).items():
-            sub_qc_path = Path(sub_qc)
+                          dumped_materials: Set, logger: Logger, game_dir: Optional[Path],
+                          global_vars: dict, regular_model_vars: dict, targeted_model_vars: dict,
+                          model_name: str = ""):
+        for sub_name, sub_qc_file in model_data.get("submodels", {}).items():
+            sub_qc_path = Path(sub_qc_file)
             if not sub_qc_path.is_absolute():
-                sub_qc_path = qc_path.parent / sub_qc
+                sub_qc_path = qc_path.parent / sub_qc_path
             sub_qc_path = sub_qc_path.resolve()
             
             if not sub_qc_path.exists():
                 logger.error(f"Sub-QC not found: {sub_qc_path}")
                 continue
             
-            logger.info(f"Compiling sub-QC: {sub_qc_path.name}")
+            # Calculate defines for this submodel, applying precedence
+            submodel_defines = global_vars.copy()
+            submodel_defines.update(regular_model_vars)
+            if sub_name in targeted_model_vars:
+                submodel_defines.update(targeted_model_vars[sub_name])
             
-            temp_qc = self._create_temp_qc(sub_qc_path, logger)
+            logger.info(f"Compiling sub-QC: {sub_qc_path.name} for submodel '{sub_name}'")
+
+            submodel_base_name = f"{model_name}_{sub_name}"
+            temp_qc = self._create_temp_qc(sub_qc_path, logger, base_name=submodel_base_name, variables=submodel_defines)
             
             try:
                 success, _, sub_dumped = model_compile_studiomdl(
@@ -427,8 +467,10 @@ class ValveModelPipeline:
         compiler = ModelCompiler(studiomdl_exe, search_paths, vtfcmd_exe, 
                                 gameinfo_dir, self.args, self.logger)
         
+        global_define_vars = self.config.get("definevariable", {})
+
         for model_name, model_data in self.config.get("model", {}).items():
-            compiler.compile_model(model_name, model_data, compile_root)
+            compiler.compile_model(model_name, model_data, compile_root, global_vars=global_define_vars)
     
     def _process_material_sets(self, compile_root: Path, search_paths: List[Path]):
         for set_name, set_data in self.config.get("material", {}).items():

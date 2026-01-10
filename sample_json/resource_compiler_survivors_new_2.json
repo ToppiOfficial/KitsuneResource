@@ -1,0 +1,425 @@
+{
+    "header": "ValveModel",
+    "studiomdl": "D:/SteamLibrary/steamapps/common/Left 4 Dead 2/bin/nekomdl.exe",
+    "gameinfo": "D:/SteamLibrary/steamapps/common/Left 4 Dead 2/left4dead2/gameinfo.txt",
+    "vtfcmd": "D:/Portable Program Files/VTFeditReloaded/VTFCmd.exe",
+    "vpk": "D:/SteamLibrary/steamapps/common/Left 4 Dead 2/bin/vpk.exe",
+    "definevariable": {
+        "RigtoSurvivorAnim": "zoey"
+    },
+    "model": {
+        "Bill": {
+            "qc": "_release.qc",
+            "compile": true,
+            "definevariable": {
+                "survivorName": {"value": "bill"},
+                "modelFilePath": {"value": "survivors/survivor_namvet.mdl", "targets": ["qc"]},
+                "modelArmsFilePath": {"value": "weapons/arms/v_arms_bill.mdl", "targets": ["arms"]},
+                "modelDeathPoseFilePath": {"value": "survivors/NamVet/namvet_deathpose.mdl", "targets": ["deathpose"]}
+            },
+            "submodels": {
+                "arms": "_release_arms.qc",
+                "deathpose": "_release.qc"
+            },
+            "subdata": [
+                {
+                    "input": "scripts/addoninfo.txt",
+                    "output": "addoninfo.txt",
+                    "replace": {
+                        "$CHARA$": "Bill"
+                    }
+                },
+                {
+                    "input": "gui/workshop_landscape.psd",
+                    "output": "addonimage.jpg"
+                },
+                {
+                    "input": "gui/Lobby.psd",
+                    "output": "materials/vgui/select_bill.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT1", "-nomipmaps"]
+                    }
+                },
+                {
+                    "input": "gui/ingame.psd",
+                    "output": "materials/vgui/s_panel_namvet.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT1", "-nomipmaps"]
+                    }
+                },
+                {
+                    "input": "gui/incap.dds",
+                    "output": "materials/vgui/s_panel_namvet_incap.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT5", "-nomipmaps"]
+                    }
+                }
+            ]
+        },
+        "Francis": {
+            "qc": "_release.qc",
+            "compile": true,
+            "definevariable": {
+                "survivorName": {"value": "francis"},
+                "modelFilePath": {"value": "survivors/survivor_biker.mdl", "targets": ["qc"]},
+                "modelLightFilePath": {"value": "survivors/survivor_biker_light.mdl", "targets": ["light"]},
+                "modelArmsFilePath": {"value": "weapons/arms/v_arms_francis.mdl", "targets": ["arms"]}
+            },
+            "submodels": {
+                "arms": "_release_arms.qc",
+                "light": "_release.qc"
+            },
+            "subdata": [
+                {
+                    "input": "scripts/addoninfo.txt",
+                    "output": "addoninfo.txt",
+                    "replace": {
+                        "$CHARA$": "Francis"
+                    }
+                },
+                {
+                    "input": "gui/workshop_landscape.psd",
+                    "output": "addonimage.jpg"
+                },
+                {
+                    "input": "gui/Lobby.psd",
+                    "output": "materials/vgui/select_francis.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT1", "-nomipmaps"]
+                    }
+                },
+                {
+                    "input": "gui/ingame.psd",
+                    "output": "materials/vgui/s_panel_biker.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT1", "-nomipmaps"]
+                    }
+                },
+                {
+                    "input": "gui/incap.dds",
+                    "output": "materials/vgui/s_panel_biker_incap.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT5", "-nomipmaps"]
+                    }
+                }
+            ]
+        },
+        "Louis": {
+            "qc": "_release.qc",
+            "compile": true,
+            "definevariable": {
+                "survivorName": {"value": "louis"},
+                "modelFilePath": {"value": "survivors/survivor_manager.mdl", "targets": ["qc"]},
+                "modelArmsFilePath": {"value": "weapons/arms/v_arms_louis.mdl", "targets": ["arms"]}
+            },
+            "submodels": {
+                "arms": "_release_arms.qc"
+            },
+            "subdata": [
+                {
+                    "input": "scripts/addoninfo.txt",
+                    "output": "addoninfo.txt",
+                    "replace": {
+                        "$CHARA$": "Louis"
+                    }
+                },
+                {
+                    "input": "gui/workshop_landscape.psd",
+                    "output": "addonimage.jpg"
+                },
+                {
+                    "input": "gui/Lobby.psd",
+                    "output": "materials/vgui/select_louis.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT1", "-nomipmaps"]
+                    }
+                },
+                {
+                    "input": "gui/ingame.psd",
+                    "output": "materials/vgui/s_panel_manager.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT1", "-nomipmaps"]
+                    }
+                },
+                {
+                    "input": "gui/incap.dds",
+                    "output": "materials/vgui/s_panel_manager_incap.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT5", "-nomipmaps"]
+                    }
+                }
+            ]
+        },
+        "Zoey": {
+            "qc": "_release.qc",
+            "compile": true,
+            "definevariable": {
+                "survivorName": {"value": "zoey"},
+                "modelFilePath": {"value": "survivors/survivor_teenangst.mdl", "targets": ["qc"]},
+                "modelLightFilePath": {"value": "survivors/survivor_teenangst_light.mdl", "targets": ["light"]},
+                "modelArmsFilePath": {"value": "weapons/arms/v_arms_zoey.mdl", "targets": ["arms"]}
+            },
+            "submodels": {
+                "arms": "_release_arms.qc",
+                "light": "_release.qc"
+            },
+            "subdata": [
+                {
+                    "input": "scripts/addoninfo.txt",
+                    "output": "addoninfo.txt",
+                    "replace": {
+                        "$CHARA$": "Zoey"
+                    }
+                },
+                {
+                    "input": "gui/workshop_landscape.psd",
+                    "output": "addonimage.jpg"
+                },
+                {
+                    "input": "gui/Lobby.psd",
+                    "output": "materials/vgui/select_zoey.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT1", "-nomipmaps"]
+                    }
+                },
+                {
+                    "input": "gui/ingame.psd",
+                    "output": "materials/vgui/s_panel_teenangst.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT1", "-nomipmaps"]
+                    }
+                },
+                {
+                    "input": "gui/incap.dds",
+                    "output": "materials/vgui/s_panel_teenangst_incap.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT5", "-nomipmaps"]
+                    }
+                }
+            ]
+        },
+        "Coach": {
+            "qc": "_release.qc",
+            "compile": true,
+            "definevariable": {
+                "survivorName": {"value": "coach"},
+                "modelFilePath": {"value": "survivors/survivor_coach.mdl", "targets": ["qc"]},
+                "modelArmsFilePath": {"value": "weapons/arms/v_arms_coach_new.mdl", "targets": ["arms"]}
+            },
+            "submodels": {
+                "arms": "_release_arms.qc"
+            },
+            "subdata": [
+                {
+                    "input": "scripts/addoninfo.txt",
+                    "output": "addoninfo.txt",
+                    "replace": {
+                        "$CHARA$": "Coach"
+                    }
+                },
+                {
+                    "input": "gui/workshop_landscape.psd",
+                    "output": "addonimage.jpg"
+                },
+                {
+                    "input": "gui/Lobby.psd",
+                    "output": "materials/vgui/s_panel_lobby_coach.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT1", "-nomipmaps"]
+                    }
+                },
+                {
+                    "input": "gui/ingame.psd",
+                    "output": "materials/vgui/s_panel_coach.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT1", "-nomipmaps"]
+                    }
+                },
+                {
+                    "input": "gui/incap.dds",
+                    "output": "materials/vgui/s_panel_coach_incap.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT5", "-nomipmaps"]
+                    }
+                }
+            ]
+        },
+        "Ellis": {
+            "qc": "_release.qc",
+            "compile": true,
+            "definevariable": {
+                "survivorName": {"value": "ellis"},
+                "modelFilePath": {"value": "survivors/survivor_mechanic.mdl", "targets": ["qc"]},
+                "modelArmsFilePath": {"value": "weapons/arms/v_arms_mechanic_new.mdl", "targets": ["arms"]}
+            },
+            "submodels": {
+                "arms": "_release_arms.qc"
+            },
+            "subdata": [
+                {
+                    "input": "scripts/addoninfo.txt",
+                    "output": "addoninfo.txt",
+                    "replace": {
+                        "$CHARA$": "Ellis"
+                    }
+                },
+                {
+                    "input": "gui/workshop_landscape.psd",
+                    "output": "addonimage.jpg"
+                },
+                {
+                    "input": "gui/Lobby.psd",
+                    "output": "materials/vgui/s_panel_lobby_mechanic.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT1", "-nomipmaps"]
+                    }
+                },
+                {
+                    "input": "gui/ingame.psd",
+                    "output": "materials/vgui/s_panel_mechanic.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT1", "-nomipmaps"]
+                    }
+                },
+                {
+                    "input": "gui/incap.dds",
+                    "output": "materials/vgui/s_panel_mechanic_incap.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT5", "-nomipmaps"]
+                    }
+                }
+            ]
+        },
+        "Nick": {
+            "qc": "_release.qc",
+            "compile": true,
+            "definevariable": {
+                "survivorName": {"value": "nick"},
+                "modelFilePath": {"value": "survivors/survivor_gambler.mdl", "targets": ["qc"]},
+                "modelArmsFilePath": {"value": "weapons/arms/v_arms_gambler_new.mdl", "targets": ["arms"]}
+            },
+            "submodels": {
+                "arms": "_release_arms.qc"
+            },
+            "subdata": [
+                {
+                    "input": "scripts/addoninfo.txt",
+                    "output": "addoninfo.txt",
+                    "replace": {
+                        "$CHARA$": "Nick"
+                    }
+                },
+                {
+                    "input": "gui/workshop_landscape.psd",
+                    "output": "addonimage.jpg"
+                },
+                {
+                    "input": "gui/Lobby.psd",
+                    "output": "materials/vgui/s_panel_lobby_gambler.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT1", "-nomipmaps"]
+                    }
+                },
+                {
+                    "input": "gui/ingame.psd",
+                    "output": "materials/vgui/s_panel_gambler.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT1", "-nomipmaps"]
+                    }
+                },
+                {
+                    "input": "gui/incap.dds",
+                    "output": "materials/vgui/s_panel_gambler_incap.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT5", "-nomipmaps"]
+                    }
+                }
+            ]
+        },
+        "Rochelle": {
+            "qc": "_release.qc",
+            "compile": true,
+            "definevariable": {
+                "survivorName": {"value": "rochelle"},
+                "modelFilePath": {"value": "survivors/survivor_producer.mdl", "targets": ["qc"]},
+                "modelArmsFilePath": {"value": "weapons/arms/v_arms_producer_new.mdl", "targets": ["arms"]}
+            },
+            "submodels": {
+                "arms": "_release_arms.qc"
+            },
+            "subdata": [
+                {
+                    "input": "scripts/addoninfo.txt",
+                    "output": "addoninfo.txt",
+                    "replace": {
+                        "$CHARA$": "Rochelle"
+                    }
+                },
+                {
+                    "input": "gui/workshop_landscape.psd",
+                    "output": "addonimage.jpg"
+                },
+                {
+                    "input": "gui/Lobby.psd",
+                    "output": "materials/vgui/s_panel_lobby_producer.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT1", "-nomipmaps"]
+                    }
+                },
+                {
+                    "input": "gui/ingame.psd",
+                    "output": "materials/vgui/s_panel_producer.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT1", "-nomipmaps"]
+                    }
+                },
+                {
+                    "input": "gui/incap.dds",
+                    "output": "materials/vgui/s_panel_producer_incap.vtf",
+                    "vtf": {
+                        "flags": ["NOMIP", "NOLOD"],
+                        "encoder_args": ["-format", "DXT5", "-nomipmaps"]
+                    }
+                }
+            ]
+        }
+    },
+    "data": {
+        "AssetShared": [
+            {
+                "input": "scripts/addoninfo.txt",
+                "output": "addoninfo.txt",
+                "replace": {
+                    "$CHARA$": "Shared Assets"
+                }
+            },
+            {
+                "input": "gui/workshop_landscape.psd",
+                "output": "addonimage.jpg"
+            }
+        ]
+    }
+}
