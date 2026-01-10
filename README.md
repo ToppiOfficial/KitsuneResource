@@ -55,7 +55,8 @@ Refer to sample_json/ directory for example configurations
 | `--vpk` | Package each compiled subfolder into VPK |
 | `--archive` | Archive existing compile folder instead of deletion |
 | `--game` | Compile directly to game directory (skips materials/data/VPK) |
-| `--flatten-qc` | Flatten QC files before compilation (0: no temp files, 1: keep temp files) |
+| `--keep-qc` | Keep flattened QC files after compilation |
+| `--use_qc_input` | Use original QC file directly (disable flattening) |
 
 ### ValveTexture Pipeline Options
 | Argument | Description |

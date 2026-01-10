@@ -260,7 +260,7 @@ class ModelCompiler:
                 logger=model_logger,
             )
         finally:
-            if temp_qc != qc_path and self.args.flatten_qc == 0:
+            if temp_qc != qc_path and not self.args.keep_qc:
                 temp_qc.unlink()
         
         if not success:
@@ -280,7 +280,7 @@ class ModelCompiler:
         self._process_subdata(model_data, output_dir, compile_root)
     
     def _create_temp_qc(self, qc_path: Path, logger: Logger, base_name: str, variables: dict = None) -> Path:
-        if self.args.flatten_qc is None:
+        if self.args.use_qc_input:
             return qc_path
         
         temp_qc_name = f"temp_{base_name}.qc"
@@ -326,7 +326,7 @@ class ModelCompiler:
                     logger=logger,
                 )
             finally:
-                if temp_qc != qc_path and self.args.flatten_qc == 0:
+                if temp_qc != qc_path and not self.args.keep_qc:
                     temp_qc.unlink()
             
             if success:
@@ -640,7 +640,8 @@ def display_help():
     print("  --vpk                   Package each subfolder into VPK")
     print("  --archive               Archive existing files instead of deletion")
     print("  --game                  Compile directly to game directory")
-    print("  --flatten-qc {0,1}      Flatten QC files before compilation (0: no temp files, 1: keep temp files)\n")
+    print("  --keep-qc               Keep flattened QC files after compilation")
+    print("  --use_qc_input          Use original QC file directly (disable flattening)\n")
     print("VALVETEXTURE PIPELINE OPTIONS:")
     print("  --forceupdate           Force reprocessing all textures")
     print("  --allow_reprocess       Allow same file to be processed multiple times")
@@ -729,8 +730,10 @@ def main():
                           help="Archive existing files instead of deletion")
         parser.add_argument("--game", action="store_true",
                           help="Compile models directly to game directory (skips materials/data/VPK)")
-        parser.add_argument("--flatten-qc", type=int, choices=[0, 1],
-                          help="Flatten QC files before compilation (0: no temp files, 1: keep temp files)")
+        parser.add_argument("--keep-qc", action="store_true",
+                          help="Keep flattened QC files after compilation")
+        parser.add_argument("--use_qc_input", action="store_true",
+                          help="Use original QC file directly (disable flattening)")
         
         try:
             args = parser.parse_args()
