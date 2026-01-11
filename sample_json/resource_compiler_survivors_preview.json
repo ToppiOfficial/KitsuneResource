@@ -9,9 +9,13 @@
         "PreviewModel": {
             "qc": "_preview.qc",
             "definevariable" : {
-                "survivorName": {"value": "bill"}
+                "survivorName": {"value": "bill"},
+                "modelArmsFilePath": {"value": "weapons/arms/sample_arms.mdl", "targets": ["arms"]}
             },
-            "compile": true
+            "compile": true,
+            "submodels" : {
+                "arms" : "_release_arms.qc"
+            }
         }
     }
 }
