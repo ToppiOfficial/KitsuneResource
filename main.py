@@ -208,14 +208,16 @@ class ModelCompiler:
             model_logger.error(f"QC file not found: {qc_path}")
             return
         
+        game_dir = self.gameinfo_dir
         if self.args.game:
+            if not game_dir:
+                model_logger.error("--game mode requires a valid 'gameinfo' path in your config.")
+                return
             output_dir = None
-            game_dir = self.gameinfo_dir
             model_logger.info(f"Compiling model {qc_path.name} directly to game directory")
         else:
             output_dir = compile_root / model_name
             output_dir.mkdir(parents=True, exist_ok=True)
-            game_dir = None
             model_logger.info(f"Compiling model {qc_path.name}")
         
         model_define_vars = model_data.get("definevariable", {})
