@@ -10,7 +10,7 @@ class VMTCreator:
     @staticmethod
     def create_from_template(vmt_template_json, vtf_path: Path, compile_root: Path, 
                            args, logger: Logger):
-        vmt_template = resolve_json_path(vmt_template_json, args.config, args.dir)
+        vmt_template = resolve_json_path(vmt_template_json, args.config_path, args.dir)
         if not vmt_template.exists():
             logger.warn(f"VMT template not found, skipping: {vmt_template}")
             return

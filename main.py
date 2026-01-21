@@ -1,8 +1,4 @@
-import argparse
-import shutil
-import os
-import re
-import sys
+import argparse, shutil, os, re, sys
 from pathlib import Path
 from datetime import datetime
 from typing import List, Set, Optional
@@ -93,6 +89,11 @@ class DataProcessor:
         self.vtfcmd_exe = vtfcmd_exe
         self.args = args
         self.logger = PrefixedLogger(logger, "DATA")
+        self.handlers = [
+            self._handle_text_replacement,
+            self._handle_vtf_export,
+            self._handle_image_conversion,
+        ]
     
     def process_items(self, items: list, base_output: Path):
         for item in items:
@@ -102,19 +103,16 @@ class DataProcessor:
                 self.logger.error(f"Failed to process item: {e}")
     
     def _process_single_item(self, item: dict, base_output: Path):
-        input_path = resolve_json_path(item.get("input"), self.args.config, self.args.dir)
+        input_path = resolve_json_path(item.get("input"), self.args.config_path, self.args.dir)
         output_path = base_output / Path(item.get("output"))
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
         input_str = item.get("input").strip()
         output_str = item.get("output").strip()
-        
-        if self._handle_text_replacement(item, input_path, output_path, input_str, output_str):
-            return
-        if self._handle_vtf_export(item, input_path, output_path, input_str, output_str):
-            return
-        if self._handle_image_conversion(input_path, output_path, input_str, output_str):
-            return
+
+        for handler in self.handlers:
+            if handler(item, input_path, output_path, input_str, output_str):
+                return
         
         self._copy_file(input_path, output_path)
     
@@ -126,6 +124,8 @@ class DataProcessor:
         
         replace_map = item.get("replace")
         if not replace_map:
+            # This is not a text replacement task, but another handler might use text files
+            # so we don't return True
             return False
         
         try:
@@ -147,6 +147,9 @@ class DataProcessor:
         
         vtf_data = item.get("vtf")
         
+        # This is a VTF export task, even if conversion doesn't happen
+        # (e.g. only a .vmt is created)
+        
         if not input_str.endswith(".vtf") and self.vtfcmd_exe:
             try:
                 export_vtf(
@@ -166,7 +169,7 @@ class DataProcessor:
                                           self.compile_root, self.args, self.logger)
         return True
     
-    def _handle_image_conversion(self, input_path: Path, output_path: Path,
+    def _handle_image_conversion(self, item: dict, input_path: Path, output_path: Path,
                                 input_str: str, output_str: str) -> bool:
         if not (input_str.endswith(SUPPORTED_IMAGE_FORMAT) and 
                 output_str.endswith(SUPPORTED_IMAGE_FORMAT)):
@@ -196,12 +199,63 @@ class ModelCompiler:
         self.args = args
         self.logger = logger
     
+    def _parse_model_defines(self, model_define_vars: dict) -> tuple[dict, dict]:
+        """Parses definevariable from config into regular and targeted defines."""
+        regular_model_defines = {}
+        targeted_model_defines = {}
+
+        for name, value in model_define_vars.items():
+            if isinstance(value, dict) and 'targets' in value and 'value' in value:
+                for target_name in value['targets']:
+                    if target_name not in targeted_model_defines:
+                        targeted_model_defines[target_name] = {}
+                    targeted_model_defines[target_name][name] = value['value']
+            elif isinstance(value, dict) and 'value' in value:
+                regular_model_defines[name] = value['value']
+            else:
+                regular_model_defines[name] = value
+        
+        return regular_model_defines, targeted_model_defines
+
+    def _get_qc_defines(self, target_name: str, regular_vars: dict, 
+                        targeted_vars: dict, global_vars: dict) -> dict:
+        """Constructs a dictionary of variables for a specific QC."""
+        defines = global_vars.copy()
+        defines.update(regular_vars)
+        if target_name in targeted_vars:
+            defines.update(targeted_vars[target_name])
+        return defines
+
+    def _compile_single_qc(self, qc_path: Path, base_name: str, variables: dict, 
+                           output_dir: Optional[Path], game_dir: Optional[Path], logger: Logger):
+        """Compiles a single QC file, handling temp file creation and cleanup."""
+        temp_qc = self._create_temp_qc(qc_path, logger, base_name=base_name, variables=variables)
+        
+        try:
+            success, _, dumped_materials = model_compile_studiomdl(
+                studiomdl_exe=self.studiomdl_exe,
+                qc_file=temp_qc,
+                output_dir=output_dir,
+                game_dir=game_dir,
+                verbose=self.args.verbose,
+                logger=logger,
+            )
+        finally:
+            if temp_qc != qc_path and not self.args.keep_flat_qc:
+                if temp_qc.exists():
+                    temp_qc.unlink()
+                
+        return success, dumped_materials
+
     def compile_model(self, model_name: str, model_data: dict, compile_root: Path, global_vars: dict = None):
+        self.logger.info("")
         model_logger = PrefixedLogger(self.logger, "MODEL")
         
         if not model_data.get('compile', True):
             model_logger.warn(f"Skipping model {model_name} (compile=false)")
             return
+        
+        model_logger.info(f"Compiling model: {model_name}")
         
         qc_path = Path(model_data.get("qc")).resolve()
         if not qc_path.exists():
@@ -220,50 +274,15 @@ class ModelCompiler:
             output_dir.mkdir(parents=True, exist_ok=True)
             model_logger.info(f"Compiling model {qc_path.name}")
         
+        global_vars = global_vars or {}
         model_define_vars = model_data.get("definevariable", {})
-        if global_vars is None:
-            global_vars = {}
-
-        regular_model_defines = {}
-        targeted_model_defines = {}
-
-        for name, value in model_define_vars.items():
-            # Check for the new "targets" key for specific variable application
-            if isinstance(value, dict) and 'targets' in value and 'value' in value:
-                # Targeted define
-                for target_name in value['targets']:
-                    if target_name not in targeted_model_defines:
-                        targeted_model_defines[target_name] = {}
-                    targeted_model_defines[target_name][name] = value['value']
-            elif isinstance(value, dict) and 'value' in value:
-                # Regular define with value wrapper
-                regular_model_defines[name] = value['value']
-            else:
-                # Regular define, applies to all
-                regular_model_defines[name] = value
-
-        # Variables for the main model
-        main_model_defines = global_vars.copy()
-        main_model_defines.update(regular_model_defines)
-
-        # Apply variables targeted specifically to the main QC
-        if "qc" in targeted_model_defines:
-            main_model_defines.update(targeted_model_defines["qc"])
-
-        temp_qc = self._create_temp_qc(qc_path, model_logger, base_name=model_name, variables=main_model_defines)
+        regular_model_defines, targeted_model_defines = self._parse_model_defines(model_define_vars)
         
-        try:
-            success, compiled_files, dumped_materials = model_compile_studiomdl(
-                studiomdl_exe=self.studiomdl_exe,
-                qc_file=temp_qc,
-                output_dir=output_dir,
-                game_dir=game_dir,
-                verbose=self.args.verbose,
-                logger=model_logger,
-            )
-        finally:
-            if temp_qc != qc_path and not self.args.keep_qc:
-                temp_qc.unlink()
+        main_model_defines = self._get_qc_defines("qc", regular_model_defines, targeted_model_defines, global_vars)
+        
+        success, dumped_materials = self._compile_single_qc(
+            qc_path, model_name, main_model_defines, output_dir, game_dir, model_logger
+        )
         
         if not success:
             model_logger.error("Main QC compilation failed.")
@@ -272,25 +291,33 @@ class ModelCompiler:
         dumped_materials = set(dumped_materials)
         model_logger.info(f"Compiled {qc_path.name} ({len(dumped_materials)} materials)")
         
-        self._compile_submodels(model_data, qc_path, output_dir, dumped_materials, model_logger, game_dir=game_dir, global_vars=global_vars, regular_model_vars=regular_model_defines, targeted_model_vars=targeted_model_defines, model_name=model_name)
+        self._compile_submodels(
+            model_data, qc_path, output_dir, dumped_materials, model_logger, 
+            game_dir=game_dir, 
+            global_vars=global_vars, 
+            regular_model_vars=regular_model_defines, 
+            targeted_model_vars=targeted_model_defines, 
+            model_name=model_name
+        )
         
         if self.args.game:
-            model_logger.info("--game mode: Skipping material copy and subdata processing")
             return
         
         self._process_materials(qc_path, dumped_materials, output_dir, compile_root, model_logger)
         self._process_subdata(model_data, output_dir, compile_root)
     
     def _create_temp_qc(self, qc_path: Path, logger: Logger, base_name: str, variables: dict = None) -> Path:
-        if self.args.use_qc_input:
+        if self.args.qc_mode == 1:
+            logger.info("QC mode 1: Using original QC file directly.")
             return qc_path
         
+        # QC mode 2 (default): flatten
         temp_qc_name = f"temp_{base_name}.qc"
         temp_qc = qc_path.parent / temp_qc_name
         qc_content = flatten_qc(qc_path, logger=logger, _variables=variables)
         with open(temp_qc, 'w', encoding='utf-8') as dst:
             dst.write(qc_content)
-        logger.info(f"Flattened QC: {qc_path.name} to {temp_qc.name}")
+        logger.info(f"QC mode 2: Flattened QC {qc_path.name} to {temp_qc.name}")
         return temp_qc
     
     def _compile_submodels(self, model_data: dict, qc_path: Path, output_dir: Optional[Path],
@@ -307,29 +334,14 @@ class ModelCompiler:
                 logger.error(f"Sub-QC not found: {sub_qc_path}")
                 continue
             
-            # Calculate defines for this submodel, applying precedence
-            submodel_defines = global_vars.copy()
-            submodel_defines.update(regular_model_vars)
-            if sub_name in targeted_model_vars:
-                submodel_defines.update(targeted_model_vars[sub_name])
+            submodel_defines = self._get_qc_defines(sub_name, regular_model_vars, targeted_model_vars, global_vars)
             
             logger.info(f"Compiling sub-QC: {sub_qc_path.name} for submodel '{sub_name}'")
 
             submodel_base_name = f"{model_name}_{sub_name}"
-            temp_qc = self._create_temp_qc(sub_qc_path, logger, base_name=submodel_base_name, variables=submodel_defines)
-            
-            try:
-                success, _, sub_dumped = model_compile_studiomdl(
-                    studiomdl_exe=self.studiomdl_exe,
-                    qc_file=temp_qc,
-                    output_dir=output_dir,
-                    game_dir=game_dir,
-                    verbose=self.args.verbose,
-                    logger=logger,
-                )
-            finally:
-                if temp_qc != qc_path and not self.args.keep_qc:
-                    temp_qc.unlink()
+            success, sub_dumped = self._compile_single_qc(
+                sub_qc_path, submodel_base_name, submodel_defines, output_dir, game_dir, logger
+            )
             
             if success:
                 dumped_materials.update(set(sub_dumped))
@@ -337,13 +349,26 @@ class ModelCompiler:
     
     def _process_materials(self, qc_path: Path, dumped_materials: Set, 
                           output_dir: Path, compile_root: Path, logger: Logger):
-        if self.args.nomaterial:
-            logger.warn("Skipping model material copying (-nomaterial)")
+        mode = self.args.mat_mode
+        
+        if mode == 0:
+            logger.warn("Skipping model material copying (mat-mode: 0)")
             return
         
         mat_logger = PrefixedLogger(self.logger, "MATERIAL")
-        copy_target = (compile_root / "Assetshared" if self.args.sharedmaterials 
-                      else output_dir)
+
+        localize = True
+        copy_target = None
+
+        if mode == 1:  # 'raw-local'
+            copy_target = output_dir
+            localize = False
+            mat_logger.info("Material mode 'raw-local': copying to model folder without localization.")
+        elif mode == 2:  # 'shared'
+            copy_target = compile_root / "Assetshared"
+            localize = not self.args.no_mat_local  # on by default, off with flag
+            mat_logger.info(f"Material mode 'shared': copying to shared folder (localization: {'on' if localize else 'off'}).")
+        
         copy_target.mkdir(parents=True, exist_ok=True)
         
         qc_material_paths = qc_read_materials(qc_path, dumped_materials)
@@ -353,12 +378,14 @@ class ModelCompiler:
             mat_logger.debug(mat)
         
         mat_logger.info(f"Copying {len(dumped_materials)} materials to {copy_target}...")
-        material_to_vmt = map_materials_to_vmt(qc_material_paths, self.search_paths)
+        material_to_vmt = map_materials_to_vmt(
+            qc_material_paths, self.search_paths, logger=mat_logger
+        )
         copied_files = copy_materials(
             material_to_vmt,
             copy_target,
             self.search_paths,
-            localize_data=not self.args.nolocalize,
+            localize_data=localize,
             logger=mat_logger,
         )
         mat_logger.info(f"Material copy complete ({len(copied_files)} files).")
@@ -414,8 +441,17 @@ class ValveModelPipeline:
             self.logger.error("Config missing required field: studiomdl")
             return
         
+        # Handle --game flag and optional path override for gameinfo
+        if isinstance(self.args.game, str):
+            game_override_dir = Path(self.args.game)
+            if (game_override_dir / "gameinfo.txt").is_file():
+                gameinfo_path = game_override_dir / "gameinfo.txt"
+                self.logger.info(f"--game override: Using gameinfo.txt from {game_override_dir}")
+            else:
+                self.logger.warn(f"--game path '{self.args.game}' provided, but no gameinfo.txt found. Ignoring path.")
+
         if self.args.game and not gameinfo_path:
-            self.logger.error("--game mode requires 'gameinfo' to be specified in config")
+            self.logger.error("--game mode requires a valid 'gameinfo' path from config or --game argument.")
             return
         
         gameinfo_dir = None
@@ -437,7 +473,7 @@ class ValveModelPipeline:
                 self.logger.info(f"Game directory: {gameinfo_dir}")
             self.logger.info("Materials, data sections, and VPK packaging will be skipped")
         else:
-            CompileFolderManager.clean(compile_root, self.logger, self.args.archive)
+            CompileFolderManager.clean(compile_root, self.logger, self.args.archive_old_ver)
         
         if search_paths:
             self.logger.info("")
@@ -460,7 +496,7 @@ class ValveModelPipeline:
         self._process_material_sets(compile_root, search_paths)
         self._process_data_sections(compile_root, vtfcmd_exe)
         
-        if self.args.vpk:
+        if self.args.package_files:
             self._package_vpks(compile_root, vpk_exe)
     
     def _compile_models(self, compile_root: Path, studiomdl_exe: Path, 
@@ -515,7 +551,7 @@ class ValveTexturePipeline:
             return
         
         try:
-            root_dir = PathResolver.get_root_dir(self.args, Path(self.args.config).resolve())
+            root_dir = PathResolver.get_root_dir(self.args, Path(self.args.config_path).resolve())
             if getattr(self.args, "dir", None):
                 self.logger.info(f"Overriding input/output root with --dir: {root_dir}")
         except ValueError as e:
@@ -624,149 +660,115 @@ def wait_for_keypress():
     except (EOFError, KeyboardInterrupt):
         pass
 
-def display_help():
-    """Display comprehensive help information"""
-    print("USAGE:")
-    print("  main.py --config <path> [options]\n")
-    print("REQUIRED ARGUMENTS:")
-    print("  --config CONFIG_JSON    Path to config.json file\n")
-    print("GLOBAL OPTIONS:")
-    print("  --log <dir (optional)>  Enable logging to file")
-    print("  --verbose               Enable verbose logging")
-    print("  --dir PATH              Override input/output root directory\n")
-    print("VALVEMODEL PIPELINE OPTIONS:")
-    print("  --exportdir DIR         Root folder for compiled output")
-    print("  --nomaterial            Skip material mapping/copying")
-    print("  --nolocalize            Disable material localization")
-    print("  --sharedmaterials       Copy materials into compile/Assetshared")
-    print("  --vpk                   Package each subfolder into VPK")
-    print("  --archive               Archive existing files instead of deletion")
-    print("  --game                  Compile directly to game directory")
-    print("  --keep-qc               Keep flattened QC files after compilation")
-    print("  --use_qc_input          Use original QC file directly (disable flattening)\n")
-    print("VALVETEXTURE PIPELINE OPTIONS:")
-    print("  --forceupdate           Force reprocessing all textures")
-    print("  --allow_reprocess       Allow same file to be processed multiple times")
-    print("  --recursive             Search for files recursively\n")
-    print("EXAMPLES:")
-    print("  main.py --config myconfig.json")
-    print("  main.py --config myconfig.json --log --verbose")
-    print("  main.py --config myconfig.json --game --vpk\n")
-
 @timer
 def main():
     print_header()
+
+    parser = argparse.ArgumentParser(description="Source Resource Compiler")
     
-    if len(sys.argv) == 1 or '--help' in sys.argv or '-h' in sys.argv:
-        display_help()
-        wait_for_keypress()
-        sys.exit(0)
-    
-    global_parser = argparse.ArgumentParser(
-        description="Source Resource Compiler", 
-        add_help=False
-    )
-    global_parser.add_argument("--config", "-config", required=True, 
-                              metavar="CONFIG_JSON",
-                              help="Path to config.json file")
-    global_parser.add_argument("--log", nargs='?', const="kitsune_log", default=None,
-                              metavar="LOG_DIR",
-                              help="Enable logging to file. Defaults to './kitsun_log'. "
-                                   "Optionally provide a relative or absolute directory.")
-    global_parser.add_argument("--verbose", action="store_true", 
-                              help="Enable verbose logging")
-    global_parser.add_argument("--dir", type=str,
-                              help="Absolute path to override input/output root")
-    
-    try:
-        global_args, remaining_argv = global_parser.parse_known_args()
-    except SystemExit:
-        print("\n" + "!"*60)
-        print("ERROR: Missing required argument --config")
-        print("!"*60)
-        print("\nThe --config argument is required to specify your configuration file.")
-        print("Run with --help to see all available options.")
-        wait_for_keypress()
-        sys.exit(1)
-    
+    # Positional argument
+    parser.add_argument("config_path", metavar="CONFIG_JSON",
+                        help="Path to the config.json file.")
+
+    # Global arguments
+    parser.add_argument("--log", action="store_true",
+                        help="Enable logging to the './kitsune_log' directory.")
+    parser.add_argument("--verbose", action="store_true", 
+                        help="Enable verbose logging.")
+    parser.add_argument("--basedir", type=str,
+                        help="Absolute path to override input/output root.")
+
+    # ValveModel Pipeline arguments
+    model_group = parser.add_argument_group("ValveModel Pipeline")
+    model_group.add_argument("--exportdir", metavar="COMPILE_DIR", 
+                         default=DEFAULT_COMPILE_ROOT,
+                         help=f"Root folder for compiled output.")
+    model_group.add_argument("--game", nargs='?', const=True, default=False,
+                         help="Compile models directly to game directory. Optionally provide a path to a directory with gameinfo.txt to override config.")
+    model_group.add_argument("--mat-mode", type=int, default=2, choices=[0,1,2],
+                         help="Material mode: 0=skip, 1=raw-local, 2=shared (default).")
+    model_group.add_argument("--no-mat-local", action="store_true",
+                         help="Disable material localization.")
+    model_group.add_argument("--package-files", action="store_true", 
+                         help="Package each subfolder into VPK (formerly --vpk).")
+    model_group.add_argument("--archive-old-ver", action="store_true", 
+                         help="Archive existing files instead of deletion (formerly --archive).")
+    model_group.add_argument("--qc-mode", type=int, default=2, choices=[1,2],
+                         help="QC mode: 1=use raw QC, 2=use flattened QC (default).")
+    model_group.add_argument("--keep-flat-qc", action="store_true",
+                         help="Keep flattened QC files after compilation.")
+
+    # ValveTexture Pipeline arguments
+    texture_group = parser.add_argument_group("ValveTexture Pipeline")
+    texture_group.add_argument("--forceupdate", action="store_true",
+                         help="Force reprocessing all textures.")
+    texture_group.add_argument("--allow_reprocess", action="store_true",
+                         help="Allow same file to be processed multiple times.")
+    texture_group.add_argument("--recursive", action="store_true",
+                         help="Search for files recursively in subfolders.")
+
+    # Process args to allow single-dash long options
+    processed_argv = []
+    for arg in sys.argv[1:]:
+        if arg.startswith('-') and not arg.startswith('--') and len(arg) > 2:
+            is_negative_number = False
+            try:
+                float(arg)
+                is_negative_number = True
+            except ValueError:
+                pass
+            
+            if not is_negative_number:
+                processed_argv.append('--' + arg[1:])
+            else:
+                processed_argv.append(arg)
+        else:
+            processed_argv.append(arg)
+
+    args = parser.parse_args(processed_argv)
+
+    # Setup logger
     log_file = None
-    if global_args.log:
-        log_dir = Path(global_args.log).resolve()
-        
+    if args.log:
+        log_dir = Path("kitsune_log").resolve()
         log_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         log_file = log_dir / f"kitsune_log_{timestamp}.txt"
     
-    logger = Logger(verbose=global_args.verbose, use_color=True, log_file=log_file)
+    logger = Logger(verbose=args.verbose, use_color=True, log_file=log_file)
     if log_file:
         logger.info(f"Logging enabled → {log_file}")
-    
+        logger.info(f"")
+
+    # Process config and execute pipeline
     try:
-        config = parse_config_json(global_args.config)
+        config = parse_config_json(args.config_path)
     except (FileNotFoundError, ValueError) as e:
         logger.error(str(e))
-        wait_for_keypress()
         return logger
-    
+
     header = config.get("header")
     if not header:
-        logger.error("Missing 'header' field in config — cannot determine pipeline type")
-        wait_for_keypress()
+        logger.error("Missing 'header' field in config — cannot determine pipeline type.")
         return logger
-    
-    parser = argparse.ArgumentParser(parents=[global_parser])
-    
-    if header == "ValveModel":
-        parser.add_argument("--exportdir", metavar="COMPILE_DIR", 
-                          default=DEFAULT_COMPILE_ROOT,
-                          help=f"Root folder for compiled output")
-        parser.add_argument("--nomaterial", action="store_true", 
-                          help="Skip material mapping/copying")
-        parser.add_argument("--nolocalize", action="store_true", 
-                          help="Disable material localization")
-        parser.add_argument("--sharedmaterials", action="store_true", 
-                          help="Copy materials into compile/Assetshared")
-        parser.add_argument("--vpk", action="store_true", 
-                          help="Package each subfolder into VPK")
-        parser.add_argument("--archive", action="store_true", 
-                          help="Archive existing files instead of deletion")
-        parser.add_argument("--game", action="store_true",
-                          help="Compile models directly to game directory (skips materials/data/VPK)")
-        parser.add_argument("--keep-qc", action="store_true",
-                          help="Keep flattened QC files after compilation")
-        parser.add_argument("--use_qc_input", action="store_true",
-                          help="Use original QC file directly (disable flattening)")
-        
-        try:
-            args = parser.parse_args()
+
+    # Compatibility: Some parts of the code expect args.dir
+    args.dir = args.basedir if args.basedir is not None else os.getcwd()
+
+    try:
+        if header == "ValveModel":
             ValveModelPipeline(config, args, logger).execute()
-        except Exception as e:
-            logger.error(f"Pipeline execution failed: {e}")
-            wait_for_keypress()
-            return logger
-        
-    elif header == 'ValveTexture':
-        parser.add_argument("--forceupdate", action="store_true",
-                          help="Force reprocessing all textures")
-        parser.add_argument("--allow_reprocess", action="store_true",
-                          help="Allow same file to be processed multiple times")
-        parser.add_argument("--recursive", action="store_true",
-                          help="Search for files recursively in subfolders")
-        
-        try:
-            args = parser.parse_args()
+        elif header == 'ValveTexture':
             ValveTexturePipeline(config, args, logger).execute()
-        except Exception as e:
-            logger.error(f"Pipeline execution failed: {e}")
+        else:
+            logger.error(f"Unknown pipeline header: {header}")
             wait_for_keypress()
             return logger
-        
-    else:
-        logger.error(f"Unknown pipeline header: {header}")
+    except Exception as e:
+        logger.error(f"Pipeline execution failed: {e}")
         wait_for_keypress()
         return logger
-    
-    #logger.info("Compilation complete!")
+
     return logger
 
 if __name__ == "__main__":

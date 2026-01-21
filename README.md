@@ -27,7 +27,7 @@ pip install -r requirements.txt
 
 ### Basic Command
 ```cmd
-python resourcecompiler.py --config path/to/config.json [options]
+python main.py path/to/config.json [options]
 ```
 
 ### Sample Configurations
@@ -40,120 +40,29 @@ Refer to sample_json/ directory for example configurations
 ### Global Options
 | Argument | Description |
 |----------|-------------|
-| `--config` | **(Required)** Path to JSON configuration file |
-| `--dir` | Override input/output root directory |
-| `--log <path (Optional)>` | Enable logging to timestamped file in `kitsune_log/` |
-| `--verbose` | Enable verbose output for debugging |
+| `CONFIG_JSON` | **(Required)** Path to JSON configuration file |
+| `--basedir <path>` | Absolute path to override the input/output root directory. |
+| `--log` | Enable logging to a timestamped file in the `kitsune_log/` directory. |
+| `--verbose` | Enable verbose output for debugging purposes. |
 
 ### ValveModel Pipeline Options
 | Argument | Description |
 |----------|-------------|
-| `--exportdir` | Root folder for compiled output (default: `ExportedResource`) |
-| `--nomaterial` | Skip material mapping and copying |
-| `--nolocalize` | Keep original folder structure for materials |
-| `--sharedmaterials` | Copy materials to `compile/Assetshared` folder |
-| `--vpk` | Package each compiled subfolder into VPK |
-| `--archive` | Archive existing compile folder instead of deletion |
-| `--game` | Compile directly to game directory (skips materials/data/VPK) |
-| `--keep-qc` | Keep flattened QC files after compilation |
-| `--use_qc_input` | Use original QC file directly (disable flattening) |
+| `--exportdir <dir>` | Root folder for the compiled output. Defaults to `ExportedResource`. |
+| `--game [path]` | Compile models directly into the game directory, skipping material/data processing and VPK packaging. Can optionally take a path to a directory containing `gameinfo.txt` to override the config. |
+| `--mat-mode <0,1,2>` | **0**: Skip all material processing. **1**: Copy materials locally to the model's folder (`raw-local`). **2**: Copy materials to a shared folder (default). |
+| `--no-mat-local` | When using `--mat-mode 2`, this disables the localization of material paths in VMT files. |
+| `--package-files` | Package each compiled subfolder into a separate VPK archive. (Formerly `--vpk`) |
+| `--archive-old-ver` | Archive the existing compile folder with a timestamp before starting, instead of sending it to the Recycle Bin. (Formerly `--archive`) |
+| `--qc-mode <1,2>` | **1**: Use the original QC file directly. **2**: Generate a flattened QC file that includes all sub-models and variables (default). |
+| `--keep-flat-qc` | Prevents the deletion of the temporary flattened QC files after compilation. |
 
 ### ValveTexture Pipeline Options
 | Argument | Description |
 |----------|-------------|
-| `--forceupdate` | Force reprocessing all textures |
-| `--allow_reprocess` | Allow same file to be processed multiple times |
-| `--recursive` | Search for files recursively in subfolders |
-
-## Configuration Examples
-
-### ValveModel Pipeline
-```json
-{
-  "header": "ValveModel",
-  "studiomdl": "C:/Steam/steamapps/common/Team Fortress 2/bin/studiomdl.exe",
-  "gameinfo": "C:/Steam/steamapps/common/Team Fortress 2/tf/gameinfo.txt",
-  "vtfcmd": "C:/Tools/VTFCmd.exe",
-  "vpk": "C:/Steam/steamapps/common/Team Fortress 2/bin/vpk.exe",
-  
-  "model": {
-    "MyModel": {
-      "qc": "models/mymodel/mymodel.qc",
-      "compile": true,
-      "submodels": {
-        "phymodel": "models/mymodel/phymodel.qc"
-      },
-      "definevariable": {
-        "SHARED_PATH": "models/shared",
-        "SpecificVar": {
-          "value": "custom_value",
-          "targets": ["phymodel"]
-        }
-      },
-      "subdata": [
-        {
-          "input": "textures/custom.tga",
-          "output": "materials/models/mymodel/custom.vtf",
-          "vtf": {
-            "flags": ["NOMIP"],
-            "vmt": "templates/basic.vmt"
-          }
-        }
-      ]
-    }
-  },
-  
-  "material": {
-    "SharedTextures": {
-      "materials": [
-        "models/shared/metal01",
-        "models/shared/concrete"
-      ]
-    }
-  },
-  
-  "data": {
-    "scripts": [
-      {
-        "input": "scripts/game_sounds.txt",
-        "output": "scripts/game_sounds_custom.txt",
-        "replace": {
-          "OLD_PATH": "NEW_PATH"
-        }
-      }
-    ]
-  }
-}
-```
-
-### ValveTexture Pipeline
-```json
-{
-  "header": "ValveTexture",
-  "vtfcmd": "C:/Tools/VTFCmd.exe",
-  
-  "vtf": {
-    "skybox_textures": {
-      "input": "skybox_.*\\.tga",
-      "output": "materials/skybox/",
-      "vtf": {
-        "flags": ["NOMIP", "NOLOD"],
-        "encoder_args": ["-format", "DXT1"]
-      }
-    }
-  }
-}
-```
-
-### Configuration Includes
-Split configurations across multiple files:
-```json
-{
-  "header": "ValveModel",
-  "include": ["common_settings.json", "tool_paths.json"],
-  "model": { ... }
-}
-```
+| `--forceupdate` | Force reprocessing of all textures, even if they appear to be up-to-date. |
+| `--allow_reprocess` | Allow the same source file to be processed multiple times in a single run. |
+| `--recursive` | Search for input texture files recursively through all subfolders. |
 
 ## How It Works
 

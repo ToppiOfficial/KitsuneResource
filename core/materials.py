@@ -15,12 +15,16 @@ def find_material_vmt(material_name: str, search_paths: List[Path]) -> Optional[
             return candidate
     return None
 
-def map_materials_to_vmt(materials_list: List[str], search_paths: List[Path]) -> Dict[str, Path]:
+def map_materials_to_vmt(
+    materials_list: List[str], search_paths: List[Path], logger: Optional[Logger] = None
+) -> Dict[str, Path]:
     result = {}
     for mat in materials_list:
         vmt = find_material_vmt(mat, search_paths)
         if vmt:
             result[mat] = vmt
+        elif logger:
+            logger.warn(f"Material not found: {mat}")
     return result
 
 def parse_vmt_structure(vmt_path: Path, logger: Optional[Logger] = None) -> dict:
@@ -201,6 +205,8 @@ class VMTProcessor:
                                    if self.ctx.localize_data else None)
                 included_textures, _ = self.process_vmt(candidate, included_vmt_dest, nosubfolder=True, copy_textures=False)
                 return included_textures, included_vmt_dest
+        
+        self.ctx.logger and self.ctx.logger.warn(f"Included VMT not found: {include_path}")
         return {}, None
     
     def _merge_textures(self, structure: dict, included_textures: Dict[str, Path]) -> Dict[str, Path]:
@@ -219,6 +225,7 @@ class VMTProcessor:
         for key, tex_rel in textures.items():
             tex_file = self.ctx.find_texture(tex_rel)
             if not tex_file:
+                self.ctx.logger and self.ctx.logger.warn(f'Texture file not found for "{key}" -> {tex_rel}')
                 continue
             
             dest_tex = self.ctx.localize_vtf(tex_file, dest_vmt, nosubfolder)

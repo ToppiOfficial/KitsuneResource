@@ -1,7 +1,8 @@
 import shlex
 import re
+from simpleeval import simple_eval
 from pathlib import Path
-from typing import Optional, TextIO
+from typing import Optional
 from utils import PrefixedLogger
 
 def _evaluate_condition(expression: str, variables: dict, is_ifdef: bool) -> bool:
@@ -207,9 +208,21 @@ class QCProcessor:
     
     def _handle_define_variable(self, command_parts: list, line_num: int, line: str) -> Optional[str]:
         try:
-            if len(command_parts) == 3:
-                _, var_name, var_value = command_parts
+            if len(command_parts) >= 3:
+                var_name = command_parts[1]
+                value_str = " ".join(command_parts[2:])
+
+                value_str, has_error = self._substitute_variables(value_str, line_num)
+                if has_error:
+                    return f"// ERROR Line {line_num}: Undefined variable in expression for $definevariable: {line.rstrip()}\n"
                 
+                try:
+                    # Use simple_eval to safely evaluate the expression.
+                    var_value = str(simple_eval(value_str))
+                except Exception:
+                    # If simple_eval fails, use the string value as is.
+                    var_value = value_str
+
                 if var_name in self.macro_args_override:
                     if self.logger:
                         warning_msg = f"{self.ORANGE}WARNING Line {line_num}: Cannot define variable '{var_name}' - shadowed by macro argument{self.RESET}"
@@ -235,9 +248,21 @@ class QCProcessor:
     
     def _handle_redefine_variable(self, command_parts: list, line_num: int, line: str) -> Optional[str]:
         try:
-            if len(command_parts) == 3:
-                _, var_name, var_value = command_parts
+            if len(command_parts) >= 3:
+                var_name = command_parts[1]
+                value_str = " ".join(command_parts[2:])
+
+                value_str, has_error = self._substitute_variables(value_str, line_num)
+                if has_error:
+                    return f"// ERROR Line {line_num}: Undefined variable in expression for $redefinevariable: {line.rstrip()}\n"
                 
+                try:
+                    # Use simple_eval to safely evaluate the expression.
+                    var_value = str(simple_eval(value_str))
+                except Exception:
+                    # If simple_eval fails, use the string value as is.
+                    var_value = value_str
+
                 if var_name in self.macro_args_override:
                     if self.logger:
                         error_msg = f"{self.RED}ERROR Line {line_num}: Cannot redefine macro argument '{var_name}'{self.RESET}"
