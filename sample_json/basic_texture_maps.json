@@ -1,6 +1,6 @@
 {
     "header": "ValveTexture",
-    "vtfcmd": "D:/Portable Program Files/VTFeditReloaded/VTFCmd.exe",
+    "vtfcmd": "D:/Portable Program Files/vtfreloaded/VTFCmd.exe",
     "vtf": {
         "LightWarp": {
             "input": ".*(^|[_-])warp([_-].*)?\\.(psd|png|tga|jpg|dds)$",

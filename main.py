@@ -1,5 +1,36 @@
-import argparse, shutil, os, re, sys
+import sys
+import os
 from pathlib import Path
+
+def check_and_activate_venv():
+    """Check for virtual environment and activate if found"""
+    script_dir = Path(__file__).parent.resolve()
+    
+    venv_names = ['venv', '.venv', 'env', '.env']
+    
+    for venv_name in venv_names:
+        venv_path = script_dir / venv_name
+        
+        if sys.platform == "win32":
+            python_exe = venv_path / "Scripts" / "python.exe"
+        else:
+            python_exe = venv_path / "bin" / "python"
+        
+        if venv_path.exists() and python_exe.exists():
+            if sys.executable != str(python_exe):
+                print(f"Found virtual environment: {venv_name}")
+                print(f"Restarting with venv Python: {python_exe}")
+                os.execv(str(python_exe), [str(python_exe)] + sys.argv)
+            else:
+                print(f"Already running in virtual environment: {venv_name}")
+            return True
+    
+    print("No virtual environment found, using global Python")
+    return False
+
+check_and_activate_venv()
+
+import argparse, shutil, re
 from datetime import datetime
 from typing import List, Set, Optional
 
