@@ -5,7 +5,7 @@ from datetime import datetime
 from functools import wraps
 from typing import List, Optional
 
-SOFTVERSION = 2.1
+SOFTVERSION = 2.2
 DEFAULT_COMPILE_ROOT  = 'compiled_files'
 
 SUPPORTED_TEXT_FORMAT = (
@@ -76,8 +76,11 @@ class Logger:
             else:
                 prefix = f"[{level}]"
                 if self.use_color and level in self.COLOR:
-                    prefix = f"{self.COLOR[level]}{prefix}{self.COLOR['RESET']}"
-                console_line = f"{timestamp_console} | {prefix} {message}"
+                    level_color = self.COLOR[level]
+                    colored_message = message.replace(self.COLOR['RESET'], level_color)
+                    console_line = f"{timestamp_console} | {level_color}{prefix} {colored_message}{self.COLOR['RESET']}"
+                else:
+                    console_line = f"{timestamp_console} | {prefix} {message}"
             print(console_line)
 
         # File Logging

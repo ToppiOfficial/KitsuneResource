@@ -12,15 +12,33 @@ def _evaluate_condition(expression: str, variables: dict, is_ifdef: bool) -> boo
     if is_ifdef:
         return expression in variables
 
-    def get_value(val_str: str):
-        val_str = val_str.strip().strip('"')
-        if val_str in variables:
-            return variables[val_str]
-        return val_str
+    def get_value(val_str: str, is_literal_ok: bool = False):
+        val_str = val_str.strip()
+        unquoted = val_str.strip('"')
+
+        if unquoted in variables:
+            return variables[unquoted]
+
+        # It's not a variable. Is it a quoted string literal?
+        if val_str.startswith('"') and val_str.endswith('"'):
+            return unquoted
+
+        # Is it a number literal?
+        try:
+            float(val_str)
+            return val_str
+        except (ValueError, TypeError):
+            pass
+
+        if is_literal_ok:
+            return val_str
+
+        # It is an unquoted, non-numeric literal. Treat as an undefined variable.
+        return None
 
     def compare(left_str, op, right_str):
         left = get_value(left_str)
-        right = get_value(right_str)
+        right = get_value(right_str, is_literal_ok=True)
         
         try:
             left_num, right_num = float(left), float(right)
@@ -58,6 +76,10 @@ def _evaluate_condition(expression: str, variables: dict, is_ifdef: bool) -> boo
 
     return False
 
+class QCReturnException(Exception):
+    """Raised when a $return is encountered."""
+    pass
+
 class QCProcessor:
     COMMENT_OUT_COMMANDS = {"$msg", "$echo"}
     
@@ -65,7 +87,7 @@ class QCProcessor:
     RED = "\033[91m"
     RESET = '\033[0m'
     
-    def __init__(self, variables: dict = None, macros: dict = None, logger=None, macro_args_override: dict = None):
+    def __init__(self, variables: dict = None, macros: dict = None, logger=None, macro_args_override: dict = None, include_dirs: list = None, root_dir: Path = None):
         self.variables = variables if variables is not None else {}
         self.macros = macros if macros is not None else {}
         self.logger : PrefixedLogger = logger
@@ -74,6 +96,8 @@ class QCProcessor:
         self.json_vars = set(self.variables.keys())
         self.defined_vars = set(self.variables.keys())
         self.macro_args_override = macro_args_override if macro_args_override is not None else {}
+        self.include_dirs = include_dirs if include_dirs is not None else []
+        self.root_dir = root_dir
         
     def process_line(self, line: str, line_num: int, base_dir: Path, include_stack: set) -> Optional[str]:
         stripped_line = line.strip()
@@ -87,6 +111,9 @@ class QCProcessor:
         
         if is_skipping:
             return None
+        
+        if command == "$return":
+            raise QCReturnException()
         
         if command == "$definevariable":
             return self._handle_define_variable(command_parts, line_num, stripped_line)
@@ -284,27 +311,74 @@ class QCProcessor:
         except Exception as e:
             return f"// WARNING Line {line_num}: Failed to parse $redefinevariable: {line} ({e})\n"
     
-    def _handle_include(self, original_line: str, command_parts: list, line_num: int, base_dir: Path, include_stack: set, processed_line: str) -> str:
+    def _handle_include(self, original_line: str, command_parts: list, line_num: int, 
+                     base_dir: Path, include_stack: set, processed_line: str) -> str:
+        if len(command_parts) < 2:
+            return f"// WARNING Line {line_num}: $include without path: {original_line.rstrip()}\n"
+        
+        include_file_raw = command_parts[1]
+        include_file, has_error = self._substitute_variables(include_file_raw, line_num)
+        if has_error:
+            if self.logger:
+                warning_msg = f"{self.ORANGE}WARNING Line {line_num}: Undefined variable in $include path, treating $...$ as literal{self.RESET}"
+                self.logger.warn(warning_msg)
+            include_file = include_file_raw
+        
+        resolve_base = self.root_dir if self.root_dir else base_dir
+        target_path = (resolve_base / include_file).resolve()
+        original_path_missing = False
+        
+        if not target_path.exists():
+            original_path_missing = True
+            found = False
+            include_filename = Path(include_file).name
+            for include_dir in self.include_dirs:
+                include_dir_path = Path(include_dir)
+                if not include_dir_path.is_absolute():
+                    include_dir_path = (resolve_base / include_dir_path).resolve()
+                
+                candidate_path = (include_dir_path / include_filename).resolve()
+                if candidate_path.exists():
+                    target_path = candidate_path
+                    found = True
+                    if self.logger:
+                        self.logger.info(f"Found include via includedirs: {candidate_path}")
+                    break
+            
+            if not found:
+                error_msg = f"Include file not found at line {line_num}: {include_file}"
+                if self.logger: self.logger.error(error_msg)
+
+                error_comment = f"// ERROR Line {line_num}: Include file not found: {include_file}\n"
+                error_comment += f"// Original line: {original_line.rstrip()}\n"
+                error_comment += f"// Searched in base directory and includedirs, file does not exist\n"
+
+                raise FileNotFoundError(error_msg)
+        
+        if target_path in include_stack:
+            return f"// WARNING Line {line_num}: Circular include detected: {include_file}\n"
+        
+        comment_header = "\n"
+        if original_path_missing:
+            comment_header = f"\n// NOTE: Original path '{include_file}' not found, using includedirs: {target_path}\n"
+
         try:
-            include_indent = re.match(r"^\s*", original_line).group(0)
-            include_path_str = command_parts[1]
-            next_qc_path = base_dir / include_path_str
-            
-            include_content = flatten_qc(next_qc_path, include_stack, self.variables, self.macros, self.logger, self.defined_vars)
-            
-            if include_indent:
-                indented_lines = []
-                for content_line in include_content.splitlines(True):
-                    indented_lines.append(include_indent + content_line)
-                include_content = "".join(indented_lines)
-            
-            if include_content and not include_content.endswith('\n'):
-                include_content += '\n'
-            
-            return include_content
-        except (IndexError, ValueError) as e:
-            self.output_lines.append(f"// WARNING Line {line_num}: Failed to parse $include: {processed_line} ({e})\n")
-            return original_line
+            nested_content = flatten_qc(
+                target_path,
+                _include_stack=include_stack.copy(),
+                _variables=self.variables,
+                _macros=self.macros,
+                logger=self.logger,
+                _defined_vars=self.defined_vars,
+                include_dirs=self.include_dirs,
+                _root_dir=self.root_dir
+            )
+            return comment_header + nested_content
+        except Exception as e:
+            error_msg = f"ERROR Line {line_num}: Failed to process include '{include_file}': {e}"
+            if self.logger:
+                self.logger.error(error_msg)
+            return f"// {error_msg}\n"
     
     def _handle_macro_expansion(self, active_command: str, command_parts: list, base_dir: Path, include_stack: set, line_num: int) -> str:
         macro_name = active_command[1:]
@@ -326,7 +400,9 @@ class QCProcessor:
             self.variables.copy(), 
             self.macros, 
             self.logger,
-            macro_args_override=macro_arg_mapping
+            macro_args_override=macro_arg_mapping,
+            include_dirs=self.include_dirs,
+            root_dir=self.root_dir
         )
         processor.defined_vars = self.defined_vars.copy()
         
@@ -344,7 +420,7 @@ class QCProcessor:
         return "".join(self.output_lines)
 
 
-def flatten_qc(qc_path: Path, _include_stack: set = None, _variables: dict = None, _macros: dict = None, logger=None, _defined_vars: set = None) -> str:
+def flatten_qc(qc_path: Path, _include_stack: set = None, _variables: dict = None, _macros: dict = None, logger=None, _defined_vars: set = None, include_dirs: list = None, _root_dir: Path = None) -> str:
     if _include_stack is None:
         _include_stack = set()
     if _variables is None:
@@ -355,14 +431,14 @@ def flatten_qc(qc_path: Path, _include_stack: set = None, _variables: dict = Non
         _defined_vars = set(_variables.keys())
 
     header = ""
-    if _variables and not _include_stack: # Only add header for the root file
-        for key, value in _variables.items():
-            if isinstance(value, str):
-                header += f'$definevariable "{key}" "{value}"\n'
-            else:
-                header += f'$definevariable "{key}" {value}\n'
-        if header:
-            header += '\n'
+    #if _variables and not _include_stack: # Only add header for the root file
+    #    for key, value in _variables.items():
+    #        if isinstance(value, str):
+    #            header += f'$definevariable "{key}" "{value}"\n'
+    #        else:
+    #            header += f'$definevariable "{key}" {value}\n'
+    #    if header:
+    #        header += '\n'
 
     try:
         resolved_path = qc_path.resolve(strict=True)
@@ -376,7 +452,10 @@ def flatten_qc(qc_path: Path, _include_stack: set = None, _variables: dict = Non
     
     _include_stack.add(resolved_path)
     
-    processor = QCProcessor(_variables, _macros, logger)
+    if _root_dir is None:
+        _root_dir = resolved_path.parent
+    
+    processor = QCProcessor(_variables, _macros, logger, include_dirs=include_dirs if include_dirs is not None else [], root_dir=_root_dir)
     processor.defined_vars = _defined_vars
     output_lines = []
     current_macro = None
@@ -435,7 +514,9 @@ def flatten_qc(qc_path: Path, _include_stack: set = None, _variables: dict = Non
     output_lines.extend(processor.output_lines)
     _include_stack.remove(resolved_path)
     
-    return header + "".join(output_lines)
+    final_output = header + "".join(output_lines)
+    final_output = re.sub(r'\n{2,}', '\n\n', final_output)
+    return final_output
 
 def qc_read_includes(qc_path: Path) -> list[Path]:
     if not qc_path.exists():

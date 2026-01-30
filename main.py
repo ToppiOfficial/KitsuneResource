@@ -2,33 +2,34 @@ import sys
 import os
 from pathlib import Path
 
-def check_and_activate_venv():
-    """Check for virtual environment and activate if found"""
-    script_dir = Path(__file__).parent.resolve()
-    
-    venv_names = ['venv', '.venv', 'env', '.env']
-    
-    for venv_name in venv_names:
-        venv_path = script_dir / venv_name
+if not getattr(sys, 'frozen', False):
+    def check_and_activate_venv():
+        """Check for virtual environment and activate if found"""
+        script_dir = Path(__file__).parent.resolve()
         
-        if sys.platform == "win32":
-            python_exe = venv_path / "Scripts" / "python.exe"
-        else:
-            python_exe = venv_path / "bin" / "python"
+        venv_names = ['venv', '.venv', 'env', '.env']
         
-        if venv_path.exists() and python_exe.exists():
-            if sys.executable != str(python_exe):
-                print(f"Found virtual environment: {venv_name}")
-                print(f"Restarting with venv Python: {python_exe}")
-                os.execv(str(python_exe), [str(python_exe)] + sys.argv)
+        for venv_name in venv_names:
+            venv_path = script_dir / venv_name
+            
+            if sys.platform == "win32":
+                python_exe = venv_path / "Scripts" / "python.exe"
             else:
-                print(f"Already running in virtual environment: {venv_name}")
-            return True
-    
-    print("No virtual environment found, using global Python")
-    return False
+                python_exe = venv_path / "bin" / "python"
+            
+            if venv_path.exists() and python_exe.exists():
+                if sys.executable != str(python_exe):
+                    print(f"Found virtual environment: {venv_name}")
+                    print(f"Restarting with venv Python: {python_exe}")
+                    os.execv(str(python_exe), [str(python_exe)] + sys.argv)
+                else:
+                    print(f"Already running in virtual environment: {venv_name}")
+                return True
+        
+        print("No virtual environment found, using global Python")
+        return False
 
-check_and_activate_venv()
+    check_and_activate_venv()
 
 import argparse, shutil, re
 from datetime import datetime
@@ -222,13 +223,15 @@ class ModelCompiler:
     """Handles model compilation and material processing"""
     
     def __init__(self, studiomdl_exe: Path, search_paths: List[Path], 
-                 vtfcmd_exe: Optional[Path], gameinfo_dir: Optional[Path], args, logger: Logger):
+                 vtfcmd_exe: Optional[Path], gameinfo_dir: Optional[Path], args, logger: Logger,
+                 global_includedirs: list = None):
         self.studiomdl_exe = studiomdl_exe
         self.search_paths = search_paths
         self.vtfcmd_exe = vtfcmd_exe
         self.gameinfo_dir = gameinfo_dir
         self.args = args
         self.logger = logger
+        self.global_includedirs = global_includedirs if global_includedirs is not None else []
     
     def _parse_model_defines(self, model_define_vars: dict) -> tuple[dict, dict]:
         """Parses definevariable from config into regular and targeted defines."""
@@ -258,9 +261,11 @@ class ModelCompiler:
         return defines
 
     def _compile_single_qc(self, qc_path: Path, base_name: str, variables: dict, 
-                           output_dir: Optional[Path], game_dir: Optional[Path], logger: Logger):
+                           output_dir: Optional[Path], game_dir: Optional[Path], logger: Logger,
+                           include_dirs: list = None):
         """Compiles a single QC file, handling temp file creation and cleanup."""
-        temp_qc = self._create_temp_qc(qc_path, logger, base_name=base_name, variables=variables)
+        temp_qc = self._create_temp_qc(qc_path, logger, base_name=base_name, variables=variables,
+                                    include_dirs=include_dirs)
         
         try:
             success, _, dumped_materials = model_compile_studiomdl(
@@ -311,8 +316,16 @@ class ModelCompiler:
         
         main_model_defines = self._get_qc_defines("qc", regular_model_defines, targeted_model_defines, global_vars)
         
+        include_dirs = self.global_includedirs.copy()
+        
+        if "includedirs" in model_data:
+            model_include_dirs = model_data["includedirs"]
+            if isinstance(model_include_dirs, list):
+                include_dirs.extend(model_include_dirs)
+
         success, dumped_materials = self._compile_single_qc(
-            qc_path, model_name, main_model_defines, output_dir, game_dir, model_logger
+            qc_path, model_name, main_model_defines, output_dir, game_dir, model_logger,
+            include_dirs=include_dirs
         )
         
         if not success:
@@ -328,7 +341,8 @@ class ModelCompiler:
             global_vars=global_vars, 
             regular_model_vars=regular_model_defines, 
             targeted_model_vars=targeted_model_defines, 
-            model_name=model_name
+            model_name=model_name,
+            include_dirs=include_dirs
         )
         
         if self.args.game:
@@ -337,7 +351,7 @@ class ModelCompiler:
         self._process_materials(qc_path, dumped_materials, output_dir, compile_root, model_logger)
         self._process_subdata(model_data, output_dir, compile_root)
     
-    def _create_temp_qc(self, qc_path: Path, logger: Logger, base_name: str, variables: dict = None) -> Path:
+    def _create_temp_qc(self, qc_path: Path, logger: Logger, base_name: str, variables: dict = None, include_dirs: list = None) -> Path:
         if self.args.qc_mode == 1:
             logger.info("QC mode 1: Using original QC file directly.")
             return qc_path
@@ -345,7 +359,7 @@ class ModelCompiler:
         # QC mode 2 (default): flatten
         temp_qc_name = f"temp_{base_name}.qc"
         temp_qc = qc_path.parent / temp_qc_name
-        qc_content = flatten_qc(qc_path, logger=logger, _variables=variables)
+        qc_content = flatten_qc(qc_path, logger=logger, _variables=variables, include_dirs=include_dirs)
         with open(temp_qc, 'w', encoding='utf-8') as dst:
             dst.write(qc_content)
         logger.info(f"QC mode 2: Flattened QC {qc_path.name} to {temp_qc.name}")
@@ -354,7 +368,7 @@ class ModelCompiler:
     def _compile_submodels(self, model_data: dict, qc_path: Path, output_dir: Optional[Path],
                           dumped_materials: Set, logger: Logger, game_dir: Optional[Path],
                           global_vars: dict, regular_model_vars: dict, targeted_model_vars: dict,
-                          model_name: str = ""):
+                          model_name: str = "", include_dirs: list = None):
         for sub_name, sub_qc_file in model_data.get("submodels", {}).items():
             sub_qc_path = Path(sub_qc_file)
             if not sub_qc_path.is_absolute():
@@ -371,7 +385,7 @@ class ModelCompiler:
 
             submodel_base_name = f"{model_name}_{sub_name}"
             success, sub_dumped = self._compile_single_qc(
-                sub_qc_path, submodel_base_name, submodel_defines, output_dir, game_dir, logger
+                sub_qc_path, submodel_base_name, submodel_defines, output_dir, game_dir, logger, include_dirs=include_dirs
             )
             
             if success:
@@ -533,10 +547,12 @@ class ValveModelPipeline:
     def _compile_models(self, compile_root: Path, studiomdl_exe: Path, 
                        search_paths: List[Path], vtfcmd_exe: Optional[Path], 
                        gameinfo_dir: Optional[Path]):
-        compiler = ModelCompiler(studiomdl_exe, search_paths, vtfcmd_exe, 
-                                gameinfo_dir, self.args, self.logger)
         
+        global_includedirs = self.config.get("includedirs", [])
         global_define_vars = self.config.get("definevariable", {})
+
+        compiler = ModelCompiler(studiomdl_exe, search_paths, vtfcmd_exe, 
+                                gameinfo_dir, self.args, self.logger, global_includedirs=global_includedirs)
 
         for model_name, model_data in self.config.get("model", {}).items():
             compiler.compile_model(model_name, model_data, compile_root, global_vars=global_define_vars)
@@ -684,13 +700,6 @@ class ValveTexturePipeline:
         except Exception as e:
             self.logger.error(f"Failed to export {src_file} → {output_path}: {e}")
 
-def wait_for_keypress():
-    """Wait for user to press any key before exiting"""
-    try:
-        input("\nPress Enter to exit...")
-    except (EOFError, KeyboardInterrupt):
-        pass
-
 @timer
 def main():
     print_header()
@@ -771,6 +780,50 @@ def main():
         logger.info(f"Logging enabled → {log_file}")
         logger.info(f"")
 
+    # Find config file, searching in 'configs' folder if necessary
+    config_path_str = args.config_path
+
+    if not config_path_str or not config_path_str.strip():
+        logger.error("Config file path argument is empty. Please provide a valid path.")
+        return logger
+
+    config_path = Path(config_path_str)
+
+    if not (config_path.exists() and config_path.is_file()):
+        if getattr(sys, 'frozen', False):
+            # The app is frozen (e.g., packaged with PyInstaller)
+            base_dir = Path(sys.executable).parent
+        else:
+            # The app is running from a script
+            base_dir = Path(__file__).parent
+        
+        configs_dir = base_dir / "configs"
+        config_filename = config_path.name
+        
+        # Safeguard against empty filename causing rglob to match directories
+        if not config_filename:
+            logger.warn(f"Could not determine a filename from '{config_path_str}'.")
+        else:
+            logger.info(f"Config file not found at '{config_path_str}'. Searching for '{config_filename}' in '{configs_dir}'...")
+            
+            if configs_dir.is_dir():
+                found_files = [f for f in configs_dir.rglob(config_filename) if f.is_file()]
+
+                if found_files:
+                    if len(found_files) > 1:
+                        logger.warn(f"Found multiple '{config_filename}' files. Using the first one:")
+                        for f in found_files:
+                            logger.warn(f"  - {f}")
+                    
+                    args.config_path = str(found_files[0])
+                    logger.info(f"Found config file: {args.config_path}")
+                else:
+                     logger.warn(f"Could not find a file named '{config_filename}' in subfolders of '{configs_dir}'.")
+            else:
+                logger.warn(f"The 'configs' directory does not exist at '{configs_dir}'.")
+
+        logger.info("")
+
     # Process config and execute pipeline
     try:
         config = parse_config_json(args.config_path)
@@ -793,11 +846,9 @@ def main():
             ValveTexturePipeline(config, args, logger).execute()
         else:
             logger.error(f"Unknown pipeline header: {header}")
-            wait_for_keypress()
             return logger
     except Exception as e:
         logger.error(f"Pipeline execution failed: {e}")
-        wait_for_keypress()
         return logger
 
     return logger
@@ -807,9 +858,7 @@ if __name__ == "__main__":
         main()
     except KeyboardInterrupt:
         print("\n\nOperation cancelled by user.")
-        wait_for_keypress()
         sys.exit(1)
     except Exception as e:
         print(f"\n\nFATAL ERROR: {e}")
-        wait_for_keypress()
         sys.exit(1)
