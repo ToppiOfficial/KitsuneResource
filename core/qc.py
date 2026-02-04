@@ -373,7 +373,7 @@ class QCProcessor:
                 include_dirs=self.include_dirs,
                 _root_dir=self.root_dir
             )
-            return comment_header + nested_content
+            return comment_header + nested_content + "\n"
         except Exception as e:
             error_msg = f"ERROR Line {line_num}: Failed to process include '{include_file}': {e}"
             if self.logger:
