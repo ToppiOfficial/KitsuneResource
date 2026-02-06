@@ -402,16 +402,14 @@ class ModelCompiler:
         
         mat_logger = PrefixedLogger(self.logger, "MATERIAL")
 
-        localize = True
+        localize = not self.args.no_mat_local
         copy_target = None
 
-        if mode == 1:  # 'raw-local'
+        if mode == 1:  # 'raw'
             copy_target = output_dir
-            localize = False
-            mat_logger.info("Material mode 'raw-local': copying to model folder without localization.")
+            mat_logger.info(f"Material mode 'raw-local': copying to model folder (localization: {'on' if localize else 'off'}).")
         elif mode == 2:  # 'shared'
             copy_target = compile_root / "Assetshared"
-            localize = not self.args.no_mat_local  # on by default, off with flag
             mat_logger.info(f"Material mode 'shared': copying to shared folder (localization: {'on' if localize else 'off'}).")
         
         copy_target.mkdir(parents=True, exist_ok=True)

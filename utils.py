@@ -5,7 +5,7 @@ from datetime import datetime
 from functools import wraps
 from typing import List, Optional
 
-SOFTVERSION = 2.21
+SOFTVERSION = 2.22
 DEFAULT_COMPILE_ROOT  = 'compiled_files'
 
 SUPPORTED_TEXT_FORMAT = (
@@ -74,13 +74,39 @@ class Logger:
             if level == "INFO":
                 console_line = f"{timestamp_console} | {message}"
             else:
-                prefix = f"[{level}]"
+                level_prefix_str = f"[{level}]"
+                
+                # Check for a context prefix like [MDL] by stripping color codes and using a regex
+                clean_message = self._ansi_escape.sub('', message)
+                match = re.match(r'^\[\w+\]\s', clean_message)
+
                 if self.use_color and level in self.COLOR:
                     level_color = self.COLOR[level]
-                    colored_message = message.replace(self.COLOR['RESET'], level_color)
-                    console_line = f"{timestamp_console} | {level_color}{prefix} {colored_message}{self.COLOR['RESET']}"
+                    colored_level_prefix = f"{level_color}{level_prefix_str}{self.COLOR['RESET']}"
+
+                    if match:
+                        # Context prefix found, format as: [CONTEXT] [LEVEL] MESSAGE
+                        parts = message.split(' ', 1)
+                        context_prefix = parts[0]
+                        msg_content = parts[1] if len(parts) > 1 else ''
+                        
+                        # Recolor the message part, ensuring not to mess up existing colors
+                        recolored_msg = msg_content.replace(self.COLOR['RESET'], level_color)
+                        
+                        console_line = f"{timestamp_console} | {context_prefix} {colored_level_prefix} {level_color}{recolored_msg}{self.COLOR['RESET']}"
+                    else:
+                        # No context prefix, format as: [LEVEL] MESSAGE
+                        colored_message = message.replace(self.COLOR['RESET'], level_color)
+                        console_line = f"{timestamp_console} | {colored_level_prefix} {level_color}{colored_message}{self.COLOR['RESET']}"
                 else:
-                    console_line = f"{timestamp_console} | {prefix} {message}"
+                    # Same logic, but without color
+                    if match:
+                        parts = message.split(' ', 1)
+                        context_prefix = parts[0]
+                        msg_content = parts[1] if len(parts) > 1 else ''
+                        console_line = f"{timestamp_console} | {context_prefix} {level_prefix_str} {msg_content}"
+                    else:
+                        console_line = f"{timestamp_console} | {level_prefix_str} {message}"
             print(console_line)
 
         # File Logging
@@ -113,29 +139,24 @@ class Logger:
 class PrefixedLogger:
     """Logger wrapper to prepend a colored context prefix."""
     
-    CONTEXT_COLOR = {
-        "MODEL": "\033[95m",      # magenta
-        "MATERIAL": "\033[96m",   # cyan
-        "DATA": "\033[93m",       # yellow
-        "VPK": "\033[94m",        # blue
-        "OS": "\033[92m",         # green
-    }
-
-    CONTEXT_LABELS = {
-        "MODEL": "MDL",
-        "MATERIAL": "MAT",
-        "DATA": "DAT",
-        "VPK": "VPK",
-        "OS": "OS",
+    CONTEXT_INFO = {
+        "MODEL": ("\033[95m", "MDL"),
+        "MATERIAL": ("\033[96m", "MAT"),
+        "DATA": ("\033[93m", "DAT"),
+        "VPK": ("\033[94m", "VPK"),
+        "OS": ("\033[92m", "OS"),
     }
 
     def __init__(self, base_logger, context):
         self.logger = base_logger
         self.context = context.upper()
-        label = self.CONTEXT_LABELS.get(self.context, self.context)
-        self.prefix = f"[{label}]"
-        if self.context in self.CONTEXT_COLOR:
-            self.prefix = f"{self.CONTEXT_COLOR[self.context]}{self.prefix}\033[0m"
+        
+        color, label = self.CONTEXT_INFO.get(self.context, (None, self.context))
+
+        if color and self.logger.use_color:
+            self.prefix = f"{color}[{label}]{self.logger.COLOR['RESET']}"
+        else:
+            self.prefix = f"[{label}]"
 
     def info(self, msg):
         self.logger.info(f"{self.prefix} {msg}")
