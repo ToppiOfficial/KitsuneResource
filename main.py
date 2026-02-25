@@ -135,7 +135,7 @@ class DataProcessor:
                 self.logger.error(f"Failed to process item: {e}")
     
     def _process_single_item(self, item: dict, base_output: Path):
-        input_path = resolve_json_path(item.get("input"), self.args.config_path, self.args.dir)
+        input_path = resolve_json_path(item.get("input"), self.args.config_path, self.args.basedir)
         output_path = base_output / Path(item.get("output"))
         output_path.parent.mkdir(parents=True, exist_ok=True)
         
@@ -696,7 +696,7 @@ class ValveTexturePipeline:
             os.utime(output_path, (src_file.stat().st_atime, src_file.stat().st_mtime))
             self.logger.debug(f"Finished VTF: {output_path} (mtime synced to source)")
         except Exception as e:
-            self.logger.error(f"Failed to export {src_file} → {output_path}: {e}")
+            self.logger.error(f"Failed to export {src_file} -> {output_path}: {e}")
 
 @timer
 def main():
@@ -713,8 +713,6 @@ def main():
                         help="Enable logging to the './kitsune_log' directory.")
     parser.add_argument("--verbose", action="store_true", 
                         help="Enable verbose logging.")
-    parser.add_argument("--basedir", type=str,
-                        help="Absolute path to override input/output root.")
 
     # ValveModel Pipeline arguments
     model_group = parser.add_argument_group("ValveModel Pipeline")
@@ -744,26 +742,18 @@ def main():
                          help="Allow same file to be processed multiple times.")
     texture_group.add_argument("--recursive", action="store_true",
                          help="Search for files recursively in subfolders.")
-
-    # Process args to allow single-dash long options
-    processed_argv = []
-    for arg in sys.argv[1:]:
-        if arg.startswith('-') and not arg.startswith('--') and len(arg) > 2:
-            is_negative_number = False
-            try:
-                float(arg)
-                is_negative_number = True
-            except ValueError:
-                pass
-            
-            if not is_negative_number:
-                processed_argv.append('--' + arg[1:])
+    
+    def normalize_args(argv):
+        normalized = []
+        for arg in argv:
+            # Convert single-dash long args (e.g. -log, -verbose) to double-dash
+            if arg.startswith('-') and not arg.startswith('--') and len(arg) > 2:
+                normalized.append('-' + arg)
             else:
-                processed_argv.append(arg)
-        else:
-            processed_argv.append(arg)
+                normalized.append(arg)
+        return normalized
 
-    args = parser.parse_args(processed_argv)
+    args = parser.parse_args(normalize_args(sys.argv[1:]))
 
     # Setup logger
     log_file = None
@@ -775,7 +765,7 @@ def main():
     
     logger = Logger(verbose=args.verbose, use_color=True, log_file=log_file)
     if log_file:
-        logger.info(f"Logging enabled → {log_file}")
+        logger.info(f"Logging enabled -> {log_file}")
         logger.info(f"")
 
     # Find config file, searching in 'configs' folder if necessary
@@ -834,8 +824,7 @@ def main():
         logger.error("Missing 'header' field in config — cannot determine pipeline type.")
         return logger
 
-    # Compatibility: Some parts of the code expect args.dir
-    args.dir = args.basedir if args.basedir is not None else os.getcwd()
+    args.basedir = os.getcwd()
 
     try:
         if header == "ValveModel":

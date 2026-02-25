@@ -5,7 +5,7 @@ from datetime import datetime
 from functools import wraps
 from typing import List, Optional
 
-SOFTVERSION = 2.22
+SOFTVERSION = 2.23
 DEFAULT_COMPILE_ROOT  = 'compiled_files'
 
 SUPPORTED_TEXT_FORMAT = (
@@ -202,10 +202,10 @@ class PathResolver:
     
     @staticmethod
     def get_root_dir(args, config_path: Path) -> Path:
-        if getattr(args, "dir", None):
-            root = Path(args.dir).resolve()
+        if getattr(args, "basedir", None):
+            root = Path(args.basedir).resolve()
             if not root.exists() or not root.is_dir():
-                raise ValueError(f"Invalid --dir path: {root}")
+                raise ValueError(f"Invalid path: {root}")
             return root
         return config_path.parent
 
