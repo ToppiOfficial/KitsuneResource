@@ -102,6 +102,7 @@ class QCProcessor:
         self.output_lines       = []
         self.json_vars          = set(self.variables)
         self.defined_vars       = set(self.variables)
+        self.pushd_stack        = []
 
     # ------------------------------------------------------------------
     # Logging helpers
@@ -155,12 +156,16 @@ class QCProcessor:
         command       = parts[0].lower() if parts else ""
         is_skipping   = bool(self.if_stack) and not self.if_stack[-1][0]
 
-        if self._handle_conditional(command, parts, line_num, is_skipping):
+        if self._handle_conditional(command, parts, line_num, is_skipping, base_dir):
             return None
         if is_skipping:
             return None
         if command == "$return":
             raise QCReturnException()
+        if command == "$pushd":
+            return self._handle_pushd(parts, line_num, base_dir, line)
+        if command == "$popd":
+            return self._handle_popd(line_num, line)
         if command == "$definevariable":
             return self._handle_define_variable(parts, line_num, stripped)
         if command == "$redefinevariable":
@@ -189,21 +194,27 @@ class QCProcessor:
     # Conditionals
     # ------------------------------------------------------------------
 
-    def _handle_conditional(self, command: str, parts: list, line_num: int, is_skipping: bool) -> bool:
-        if command in ("$if", "$ifdef"):
+    # if_stack entries: (active: bool, branch_taken: bool, kind: str)
+    # kind is the opening command, e.g. "$if", "$ifdef", "$iffileexist"
+
+    def _handle_conditional(self, command: str, parts: list, line_num: int, is_skipping: bool, base_dir: Path = None) -> bool:
+        if command in ("$if", "$ifdef", "$iffileexist"):
             if is_skipping:
-                self.if_stack.append((False, False))
+                self.if_stack.append((False, False, command))
+            elif command == "$iffileexist":
+                result = self._eval_fileexist(parts, line_num, base_dir)
+                self.if_stack.append((result, result, command))
             else:
                 expr, err = self._substitute_variables(" ".join(parts[1:]), line_num)
                 if err:
-                    self.if_stack.append((False, False))
+                    self.if_stack.append((False, False, command))
                 else:
                     result = _evaluate_condition(expr, self._effective_vars(), command == "$ifdef")
-                    self.if_stack.append((result, result))
+                    self.if_stack.append((result, result, command))
             return True
 
         if command == "$elif":
-            return self._handle_elif(parts, line_num)
+            return self._handle_elif(parts, line_num, base_dir)
 
         if command == "$else":
             return self._handle_else(line_num)
@@ -217,32 +228,80 @@ class QCProcessor:
 
         return False
 
+    def _pushd_path(self) -> Optional[Path]:
+        return self.pushd_stack[-1] if self.pushd_stack else None
+
+    def _handle_pushd(self, parts: list, line_num: int, base_dir: Path, original_line: str) -> str:
+        if len(parts) < 2:
+            self._warn(f"WARNING Line {line_num}: $pushd without a path")
+            return original_line
+        raw, _ = self._substitute_variables(parts[1], line_num)
+        dir_path = Path(raw.strip().strip('"'))
+        if not dir_path.is_absolute():
+            current = self._pushd_path() or self.root_dir or base_dir
+            dir_path = current / dir_path
+        self.pushd_stack.append(dir_path)
+        return original_line
+
+    def _handle_popd(self, line_num: int, original_line: str) -> str:
+        if not self.pushd_stack:
+            self._warn(f"WARNING Line {line_num}: $popd without matching $pushd")
+        else:
+            self.pushd_stack.pop()
+        return original_line
+
+    def _eval_fileexist(self, parts: list, line_num: int, base_dir: Path) -> bool:
+        if len(parts) < 2:
+            self._warn(f"WARNING Line {line_num}: $iffileexist without a path")
+            return False
+
+        raw, err = self._substitute_variables(parts[1], line_num)
+        if err:
+            self._warn(f"WARNING Line {line_num}: Undefined variable in $iffileexist path")
+
+        file_path = Path(raw.strip().strip('"'))
+
+        if self.pushd_stack:
+            return (self.pushd_stack[-1] / file_path).resolve().exists()
+
+        resolve_base = self.root_dir or base_dir
+        target = (resolve_base / file_path).resolve() if resolve_base else file_path.resolve()
+
+        if not target.exists() and base_dir and resolve_base != base_dir:
+            if (base_dir / file_path).resolve().exists():
+                return True
+
+        return target.exists()
+
     def _stack_error(self, keyword: str, line_num: int) -> bool:
         self.output_lines.append(f"// ERROR Line {line_num}: {keyword} without $if\n")
         return True
 
-    def _handle_elif(self, parts: list, line_num: int) -> bool:
+    def _handle_elif(self, parts: list, line_num: int, base_dir: Path = None) -> bool:
         if not self.if_stack:
             return self._stack_error("$elif", line_num)
-        _, taken = self.if_stack[-1]
+        _, taken, kind = self.if_stack[-1]
         parent_skip = len(self.if_stack) > 1 and not self.if_stack[-2][0]
         if parent_skip or taken:
-            self.if_stack[-1] = (False, True)
+            self.if_stack[-1] = (False, True, kind)
+        elif kind == "$iffileexist":
+            result = self._eval_fileexist(parts, line_num, base_dir)
+            self.if_stack[-1] = (result, result, kind)
         else:
             expr, err = self._substitute_variables(" ".join(parts[1:]), line_num)
             if err:
-                self.if_stack[-1] = (False, False)
+                self.if_stack[-1] = (False, False, kind)
             else:
                 result = _evaluate_condition(expr, self._effective_vars(), is_ifdef=False)
-                self.if_stack[-1] = (result, result)
+                self.if_stack[-1] = (result, result, kind)
         return True
 
     def _handle_else(self, line_num: int) -> bool:
         if not self.if_stack:
             return self._stack_error("$else", line_num)
-        _, taken = self.if_stack[-1]
+        _, taken, kind = self.if_stack[-1]
         parent_skip = len(self.if_stack) > 1 and not self.if_stack[-2][0]
-        self.if_stack[-1] = (False, True) if (parent_skip or taken) else (True, True)
+        self.if_stack[-1] = (False, True, kind) if (parent_skip or taken) else (True, True, kind)
         return True
 
     # ------------------------------------------------------------------
@@ -356,6 +415,7 @@ class QCProcessor:
                 _defined_vars=self.defined_vars,
                 include_dirs=self.include_dirs,
                 _root_dir=self.root_dir,
+                _pushd_stack=self.pushd_stack,
             )
             return header + nested + "\n"
         except Exception as e:
@@ -387,6 +447,7 @@ class QCProcessor:
             root_dir=self.root_dir,
         )
         processor.defined_vars = self.defined_vars.copy()
+        processor.pushd_stack  = list(self.pushd_stack)
         return processor.process_content('\n'.join(macro_def['body']) + '\n', base_dir, include_stack.copy())
 
     # ------------------------------------------------------------------
@@ -416,11 +477,13 @@ def flatten_qc(
     _defined_vars: set = None,
     include_dirs: list = None,
     _root_dir: Path = None,
+    _pushd_stack: list = None,
 ) -> str:
     _include_stack = _include_stack or set()
     _variables     = _variables     or {}
     _macros        = _macros        or {}
     _defined_vars  = _defined_vars  if _defined_vars is not None else set(_variables)
+    _pushd_stack   = list(_pushd_stack) if _pushd_stack is not None else []
 
     try:
         resolved = qc_path.resolve(strict=True)
@@ -437,6 +500,7 @@ def flatten_qc(
 
     processor = QCProcessor(_variables, _macros, logger, include_dirs=include_dirs or [], root_dir=_root_dir)
     processor.defined_vars = _defined_vars
+    processor.pushd_stack  = _pushd_stack
 
     output_lines  = []
     current_macro = None
@@ -461,7 +525,7 @@ def flatten_qc(
 
             is_skipping = bool(processor.if_stack) and not processor.if_stack[-1][0]
 
-            if processor._handle_conditional(command, parts, line_num, is_skipping):
+            if processor._handle_conditional(command, parts, line_num, is_skipping, resolved.parent):
                 continue
             if is_skipping:
                 continue
