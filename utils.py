@@ -5,7 +5,7 @@ from datetime import datetime
 from functools import wraps
 from typing import List, Optional
 
-SOFTVERSION = 2.25
+SOFTVERSION = 2.3
 DEFAULT_COMPILE_ROOT  = 'compiled_files'
 
 SUPPORTED_TEXT_FORMAT = (
@@ -143,7 +143,7 @@ class PrefixedLogger:
         "MODEL": ("\033[95m", "MDL"),
         "MATERIAL": ("\033[96m", "MAT"),
         "DATA": ("\033[93m", "DAT"),
-        "VPK": ("\033[94m", "VPK"),
+        "PACKAGER": ("\033[94m", "PACKAGER"),
         "OS": ("\033[92m", "OS"),
     }
 

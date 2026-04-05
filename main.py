@@ -49,7 +49,7 @@ from core.materials import (
 
 from core.model import model_compile_studiomdl
 from core.gameinfo import get_game_search_paths
-from core.vpk import package_vpk
+from core.packager import package_archive
 from core.image import convert_image
 from core.qc import qc_read_materials, flatten_qc
 from core.vmt import VMTCreator
@@ -476,8 +476,8 @@ class ValveModelPipeline:
         self.logger = logger
     
     def execute(self):
-        studiomdl_exe, gameinfo_path, vtfcmd_exe, vpk_exe = PathResolver.resolve_and_validate(
-            self.config, "studiomdl", "gameinfo", "vtfcmd", "vpk"
+        studiomdl_exe, gameinfo_path, vtfcmd_exe, packager_exe = PathResolver.resolve_and_validate(
+            self.config, "studiomdl", "gameinfo", "vtfcmd", "packager"
         )
         
         if not studiomdl_exe:
@@ -514,7 +514,7 @@ class ValveModelPipeline:
             self.logger.info("--game mode enabled: Compiling models directly to game directory")
             if gameinfo_dir:
                 self.logger.info(f"Game directory: {gameinfo_dir}")
-            self.logger.info("Materials, data sections, and VPK packaging will be skipped")
+            self.logger.info("Materials, data sections, and Packaging will be skipped")
         else:
             CompileFolderManager.clean(compile_root, self.logger, self.args.archive_old_ver)
         
@@ -540,7 +540,7 @@ class ValveModelPipeline:
         self._process_data_sections(compile_root, vtfcmd_exe)
         
         if self.args.package_files:
-            self._package_vpks(compile_root, vpk_exe)
+            self._package_archives(compile_root, packager_exe)
     
     def _compile_models(self, compile_root: Path, studiomdl_exe: Path, 
                        search_paths: List[Path], vtfcmd_exe: Optional[Path], 
@@ -565,14 +565,14 @@ class ValveModelPipeline:
         for folder_name, items in self.config.get("data", {}).items():
             processor.process_items(items, compile_root / folder_name)
     
-    def _package_vpks(self, compile_root: Path, vpk_exe: Optional[Path]):
-        if not vpk_exe:
-            self.logger.warn("vpk.exe not found or missing in config, skipping VPK packaging")
+    def _package_archives(self, compile_root: Path, packager_exe: Optional[Path]):
+        if not packager_exe:
+            self.logger.warn("Packager executable not found or missing in config, skipping packaging")
             return
         
         for subfolder in compile_root.iterdir():
             if subfolder.is_dir():
-                package_vpk(vpk_exe, subfolder, self.logger)
+                package_archive(packager_exe, subfolder, self.logger)
 
 class ValveTexturePipeline:
     """Pipeline for ValveTexture header"""
@@ -726,7 +726,7 @@ def main():
     model_group.add_argument("--no-mat-local", action="store_true",
                          help="Disable material localization.")
     model_group.add_argument("--package-files", action="store_true", 
-                         help="Package each subfolder into VPK (formerly --vpk).")
+                         help="Package each subfolder into VPK or GMA archive.")
     model_group.add_argument("--archive-old-ver", action="store_true", 
                          help="Archive existing files instead of deletion (formerly --archive).")
     model_group.add_argument("--qc-mode", type=int, default=2, choices=[1,2],

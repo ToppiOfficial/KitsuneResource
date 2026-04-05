@@ -1,6 +1,6 @@
 # KitsuneResource
 
-A Python-based pipeline for compiling and packaging Source Engine resources (models, materials, textures, scripts). Designed for games like **Left 4 Dead 2** and **Garry's Mod**, this tool automates compilation, material processing, texture conversion, and optional VPK packaging.
+A Python-based pipeline for compiling and packaging Source Engine resources (models, materials, textures, scripts). Designed for games like **Left 4 Dead 2** and **Garry's Mod**, this tool automates compilation, material processing, texture conversion, and optional packaging.
 
 <img width="1502" height="943" alt="Screenshot 2026-01-06 023140" src="https://github.com/user-attachments/assets/8f1f81c2-5143-478e-bf5d-4af4ab26d453" />
 
@@ -14,7 +14,7 @@ Windows 10+ or Linux with Wine 9.0 for the executables & Python 3.10+
    - Python 3.10+
    - `studiomdl.exe` (from Source SDK or any Source game's `bin/` folder)
    - `vtfcmd.exe` ([VTFLib](https://github.com/NeilJed/VTFLib))
-   - `vpk.exe` (from any Source game's `bin/` folder)
+   - `vpk.exe or gmad.exe` (from any Source game's `bin/` folder)
 
 2. **Clone and Install:**
 ```bash
