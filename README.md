@@ -21,13 +21,14 @@ Windows 10+ or Linux with Wine 9.0 for the executables & Python 3.10+
 git clone https://github.com/yourusername/KitsuneResource.git
 cd KitsuneResource
 pip install -r requirements.txt
+python build.py
 ```
 
 ## Usage
 
 ### Basic Command
 ```cmd
-python main.py path/to/config.json [options]
+python main.py path/to/config.json [options] or kitsuneresource.exe path/to/config.json [options]
 ```
 
 ### Sample Configurations
