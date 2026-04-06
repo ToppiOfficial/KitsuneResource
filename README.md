@@ -28,7 +28,7 @@ python build.py
 
 ### Basic Command
 ```cmd
-python main.py path/to/config.json [options] or kitsuneresource.exe path/to/config.json [options]
+python main.py [options] path/to/config.json or kitsuneresource.exe [options] path/to/config.json
 ```
 
 ### Sample Configurations
@@ -57,6 +57,7 @@ Refer to sample_json/ directory for example configurations
 | `--archive-old-ver` | Archive the existing compile folder with a timestamp before starting, instead of sending it to the Recycle Bin. (Formerly `--archive`) |
 | `--qc-mode <1,2>` | **1**: Use the original QC file directly. **2**: Generate a flattened QC file that includes all sub-models and variables (default). |
 | `--keep-flat-qc` | Prevents the deletion of the temporary flattened QC files after compilation. |
+| `--single-addon` | Compile all output into a single addon folder defined by 'addonroot' in config. |
 
 ### ValveTexture Pipeline Options
 | Argument | Description |

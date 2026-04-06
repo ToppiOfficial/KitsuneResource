@@ -306,7 +306,7 @@ class ModelCompiler:
             output_dir = None
             model_logger.info(f"Compiling model {qc_path.name} directly to game directory")
         else:
-            output_dir = compile_root / model_name
+            output_dir = compile_root if getattr(self.args, 'single_addon', False) else compile_root / model_name
             output_dir.mkdir(parents=True, exist_ok=True)
             model_logger.info(f"Compiling model {qc_path.name}")
         
@@ -393,7 +393,7 @@ class ModelCompiler:
                 logger.info(f"Compiled {sub_qc_path.name} ({len(sub_dumped)} materials)")
     
     def _process_materials(self, qc_path: Path, dumped_materials: Set, 
-                          output_dir: Path, compile_root: Path, logger: Logger):
+                      output_dir: Path, compile_root: Path, logger: Logger):
         mode = self.args.mat_mode
         
         if mode == 0:
@@ -402,16 +402,18 @@ class ModelCompiler:
         
         mat_logger = PrefixedLogger(self.logger, "MATERIAL")
 
-        localize = not self.args.no_mat_local
-        copy_target = None
+        if getattr(self.args, 'single_addon', False):
+            copy_target = compile_root
+            mat_logger.info("Single-addon mode: copying materials to addon root.")
+        else:
+            localize = not self.args.no_mat_local
+            if mode == 1:
+                copy_target = output_dir
+                mat_logger.info(f"Material mode 'raw-local': copying to model folder (localization: {'on' if localize else 'off'}).")
+            elif mode == 2:
+                copy_target = compile_root / "SharedAssets"
+                mat_logger.info(f"Material mode 'shared': copying to shared folder (localization: {'on' if localize else 'off'}).")
 
-        if mode == 1:  # 'raw'
-            copy_target = output_dir
-            mat_logger.info(f"Material mode 'raw-local': copying to model folder (localization: {'on' if localize else 'off'}).")
-        elif mode == 2:  # 'shared'
-            copy_target = compile_root / "Assetshared"
-            mat_logger.info(f"Material mode 'shared': copying to shared folder (localization: {'on' if localize else 'off'}).")
-        
         copy_target.mkdir(parents=True, exist_ok=True)
         
         qc_material_paths = qc_read_materials(qc_path, dumped_materials)
@@ -428,7 +430,7 @@ class ModelCompiler:
             material_to_vmt,
             copy_target,
             self.search_paths,
-            localize_data=localize,
+            localize_data=True,
             logger=mat_logger,
         )
         mat_logger.info(f"Material copy complete ({len(copied_files)} files).")
@@ -476,6 +478,7 @@ class ValveModelPipeline:
         self.logger = logger
     
     def execute(self):
+
         studiomdl_exe, gameinfo_path, vtfcmd_exe, packager_exe = PathResolver.resolve_and_validate(
             self.config, "studiomdl", "gameinfo", "vtfcmd", "packager"
         )
@@ -506,9 +509,18 @@ class ValveModelPipeline:
             self.logger.warn("No gameinfo provided. Shared materials and material collection will be limited.")
 
         compile_root = Path(self.args.exportdir or DEFAULT_COMPILE_ROOT).resolve()
-        
+
         if self.args.exportdir is None:
             self.logger.warn(f"--exportdir not provided, using default: {compile_root}")
+
+        if self.args.single_addon:
+            addon_folder = self.config.get("addonroot", "").strip()
+            if not addon_folder:
+                self.logger.error("--single-addon requires 'addonroot' to be defined and non-empty in config.")
+                return
+            compile_root = compile_root / addon_folder
+            self.args.mat_mode = 1
+            self.logger.info(f"output root set to '{compile_root}', mat-mode forced to 1")
         
         if self.args.game:
             self.logger.info("--game mode enabled: Compiling models directly to game directory")
@@ -563,16 +575,20 @@ class ValveModelPipeline:
     def _process_data_sections(self, compile_root: Path, vtfcmd_exe: Optional[Path]):
         processor = DataProcessor(compile_root, vtfcmd_exe, self.args, self.logger)
         for folder_name, items in self.config.get("data", {}).items():
-            processor.process_items(items, compile_root / folder_name)
+            output_dir = compile_root if self.args.single_addon else compile_root / folder_name
+            processor.process_items(items, output_dir)
     
     def _package_archives(self, compile_root: Path, packager_exe: Optional[Path]):
         if not packager_exe:
             self.logger.warn("Packager executable not found or missing in config, skipping packaging")
             return
         
-        for subfolder in compile_root.iterdir():
-            if subfolder.is_dir():
-                package_archive(packager_exe, subfolder, self.logger)
+        if self.args.single_addon:
+            package_archive(packager_exe, compile_root, self.logger)
+        else:
+            for subfolder in compile_root.iterdir():
+                if subfolder.is_dir():
+                    package_archive(packager_exe, subfolder, self.logger)
 
 class ValveTexturePipeline:
     """Pipeline for ValveTexture header"""
@@ -733,6 +749,8 @@ def main():
                          help="QC mode: 1=use raw QC, 2=use flattened QC (default).")
     model_group.add_argument("--keep-flat-qc", action="store_true",
                          help="Keep flattened QC files after compilation.")
+    model_group.add_argument("--single-addon", action="store_true",
+                         help="Compile all output into a single addon folder defined by 'addonroot' in config.")
 
     # ValveTexture Pipeline arguments
     texture_group = parser.add_argument_group("ValveTexture Pipeline")

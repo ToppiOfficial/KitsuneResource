@@ -26,7 +26,7 @@ class VMTCreator:
     
     @staticmethod
     def _get_relative_path(vtf_path: Path, materials_root: Path) -> str:
-        materials_root = materials_root / "AssetShared"
+        materials_root = materials_root / "SharedAssets"
         try:
             vtf_rel = vtf_path.relative_to(materials_root).with_suffix("")
             vtf_rel_posix = vtf_rel.as_posix()

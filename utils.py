@@ -1,11 +1,11 @@
 # utils.py
-import json, time, re
+import json, time, re, sys
 from pathlib import Path
 from datetime import datetime
 from functools import wraps
 from typing import List, Optional
 
-SOFTVERSION = 2.3
+SOFTVERSION = 2.31
 DEFAULT_COMPILE_ROOT  = 'compiled_files'
 
 SUPPORTED_TEXT_FORMAT = (
@@ -301,12 +301,23 @@ def parse_config_json(config_path: str, seen_paths=None, filter_keys=None) -> di
         if isinstance(includes, str):
             includes = [includes]
         included_data = {}
-        for inc_path in includes:
-            inc_path = Path(inc_path).resolve()
-            # Always filter out "include" from included JSONs to avoid nested includes
+        for inc_path_str in includes:
+            inc_path = Path(inc_path_str)
+            if not inc_path.is_absolute() or not inc_path.exists():
+                if getattr(sys, 'frozen', False):
+                    base_dir = Path(sys.executable).parent
+                else:
+                    base_dir = Path(__file__).parent
+                fallback = base_dir / "configs" / inc_path.name
+                if fallback.exists():
+                    inc_path = fallback.resolve()
+                else:
+                    inc_path = inc_path.resolve()
+            else:
+                inc_path = inc_path.resolve()
+
             inc_json = parse_config_json(inc_path, seen_paths, filter_keys=["include"] + filter_keys)
             included_data = deep_merge(included_data, inc_json)
-        config = deep_merge(included_data, config)
 
     if "header" not in config:
         raise ValueError("Invalid config.json: missing 'header' field.")
