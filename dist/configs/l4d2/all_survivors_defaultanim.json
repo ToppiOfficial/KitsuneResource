@@ -1,0 +1,57 @@
+{
+    "header": "ValveModel",
+
+    "include" : "l4d2/all_survivors.json",
+    "definevariable": {
+        "animQCIpath": "../../../.modules/survivor_prefabs"
+    },
+    "model": {
+        "Bill": {
+            "compile": true,
+            "definevariable": {
+                "RigtoSurvivorAnim": "bill"
+            }
+        },
+        "Francis": {
+            "compile": true,
+            "definevariable": {
+                "RigtoSurvivorAnim": "francis"
+            }
+        },
+        "Louis": {
+            "definevariable": {
+                "RigtoSurvivorAnim": "louis"
+            }
+        },
+        "Zoey": {
+            "compile": true,
+            "definevariable": {
+                "RigtoSurvivorAnim": "zoey"
+            }
+        },
+        "Coach": {
+            "compile": true,
+            "definevariable": {
+                "RigtoSurvivorAnim": "coach"
+            }
+        },
+        "Ellis": {
+            "compile": true,
+            "definevariable": {
+                "RigtoSurvivorAnim": "ellis"
+            }
+        },
+        "Nick": {
+            "compile": true,
+            "definevariable": {
+                "RigtoSurvivorAnim": "nick"
+            }
+        },
+        "Rochelle": {
+            "compile": true,
+            "definevariable": {
+                "RigtoSurvivorAnim": "rochelle"
+            }
+        }
+    }
+}

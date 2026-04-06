@@ -3,8 +3,14 @@
     "studiomdl": "D:/Portable Program Files/nekomdl/nekomdl.exe",
     "gameinfo": "D:/Program Files/Steam/steamapps/common/Left 4 Dead 2/left4dead2/gameinfo.txt",
     "definevariable": {
-        "RigtoSurvivorAnim": "zoey"
+        "RigtoSurvivorAnim": "zoey",
+        "animQCIpath": "../../../.modules/survivor_prefabs"
     },
+    "includedirs": [
+        "D:/Development/game-mods/left4dead2/survivors/.modules/v3.0/shared_prefabs/",
+        "D:/Development/game-mods/left4dead2/survivors/.modules/v3.0/shared_prefabs/animationlist_animswap/",
+        "D:/Development/game-mods/left4dead2/survivors/.modules/v3.0/shared_prefabs/animationlist_animlight/"
+    ],
     "model": {
         "PreviewModel": {
             "qc": "_preview.qc",

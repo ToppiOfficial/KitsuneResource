@@ -1,0 +1,38 @@
+{
+    "header": "ValveModel",
+    "studiomdl": "D:/Portable Program Files/nekomdl/nekomdl.exe",
+    "gameinfo": "D:/Program Files/Steam/steamapps/common/GarrysMod/garrysmod/gameinfo.txt",
+    "vtfcmd": "D:/Portable Program Files/vtfreloaded/VTFCmd.exe",
+    "packager": "D:/Program Files/Steam/steamapps/common/GarrysMod/bin/win64/gmad.exe",
+    "includedirs": [
+        "D:/Development/game-mods/garrysmod/player/.modules/v1.0/shared_prefabs/"
+    ],
+    "addonfolder" : "addonroot",
+    "model": {
+        "player": {
+            "qc": "_release_player.qc",
+            "compile": true,
+            "submodels": {
+                "arms": "_release_player_arms.qc"
+            }
+        },
+        "npc": {
+            "qc": "_release_npc.qc",
+            "compile": true
+        }
+    },
+    "data": {
+        "addon-autorunlua": [
+            {
+                "input": "scripts/autorun.lua",
+                "output": "lua/autorun/custom-player-npc.lua"
+            }
+        ],
+        "addon-json": [
+            {
+                "input": "scripts/addon.json",
+                "output": "addon.json"
+            }
+        ]
+    }
+}

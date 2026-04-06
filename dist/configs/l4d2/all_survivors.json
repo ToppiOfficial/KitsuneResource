@@ -3,15 +3,30 @@
     "studiomdl": "D:/Portable Program Files/nekomdl/nekomdl.exe",
     "gameinfo": "D:/Program Files/Steam/steamapps/common/Left 4 Dead 2/left4dead2/gameinfo.txt",
     "vtfcmd": "D:/Portable Program Files/vtfreloaded/VTFCmd.exe",
-    "vpk": "D:/Program Files/Steam/steamapps/common/Left 4 Dead 2/bin/vpk.exe",
-    
+    "packager": "D:/Program Files/Steam/steamapps/common/Left 4 Dead 2/bin/vpk.exe",
+    "definevariable": {
+        "RigtoSurvivorAnim": "zoey",
+        "animQCIpath": "../../../.modules/survivor_prefabs"
+    },
+    "addonroot" : "allsurvivors",
+    "includedirs": [
+        "D:/Development/game-mods/left4dead2/survivors/.modules/v3.0/shared_prefabs/",
+        "D:/Development/game-mods/left4dead2/survivors/.modules/v3.0/shared_prefabs/animationlist_animswap/",
+        "D:/Development/game-mods/left4dead2/survivors/.modules/v3.0/shared_prefabs/animationlist_animlight/"
+    ],
     "model": {
         "Bill": {
-            "qc": "namvet.qc",
+            "qc": "_release.qc",
             "compile": true,
+            "definevariable": {
+                "survivorName": {"value": "bill"},
+                "modelFilePath": {"value": "survivors/survivor_namvet.mdl", "targets": ["qc"]},
+                "modelArmsFilePath": {"value": "weapons/arms/v_arms_bill.mdl", "targets": ["arms"]},
+                "modelDeathPoseFilePath": {"value": "survivors/NamVet/namvet_deathpose.mdl", "targets": ["deathpose"]}
+            },
             "submodels": {
-                "arms": "namvet_arms.qc",
-                "deathpose": "namvet_deathpose.qc"
+                "arms": "_release_arms.qc",
+                "deathpose": "_release.qc"
             },
             "subdata": [
                 {
@@ -22,7 +37,7 @@
                     }
                 },
                 {
-                    "input": "gui/workshop_landscape.psd",
+                    "input": "gui/workshop_thumbnail.psd",
                     "output": "addonimage.jpg"
                 },
                 {
@@ -52,11 +67,17 @@
             ]
         },
         "Francis": {
-            "qc": "biker.qc",
+            "qc": "_release.qc",
             "compile": true,
+            "definevariable": {
+                "survivorName": {"value": "francis"},
+                "modelFilePath": {"value": "survivors/survivor_biker.mdl", "targets": ["qc"]},
+                "modelLightFilePath": {"value": "survivors/survivor_biker_light.mdl", "targets": ["light"]},
+                "modelArmsFilePath": {"value": "weapons/arms/v_arms_francis.mdl", "targets": ["arms"]}
+            },
             "submodels": {
-                "arms": "biker_arms.qc",
-                "light": "biker_light.qc"
+                "arms": "_release_arms.qc",
+                "light": "_release.qc"
             },
             "subdata": [
                 {
@@ -67,7 +88,7 @@
                     }
                 },
                 {
-                    "input": "gui/workshop_landscape.psd",
+                    "input": "gui/workshop_thumbnail.psd",
                     "output": "addonimage.jpg"
                 },
                 {
@@ -97,10 +118,15 @@
             ]
         },
         "Louis": {
-            "qc": "manager.qc",
+            "qc": "_release.qc",
             "compile": true,
+            "definevariable": {
+                "survivorName": {"value": "louis"},
+                "modelFilePath": {"value": "survivors/survivor_manager.mdl", "targets": ["qc"]},
+                "modelArmsFilePath": {"value": "weapons/arms/v_arms_louis.mdl", "targets": ["arms"]}
+            },
             "submodels": {
-                "arms": "manager_arms.qc"
+                "arms": "_release_arms.qc"
             },
             "subdata": [
                 {
@@ -111,7 +137,7 @@
                     }
                 },
                 {
-                    "input": "gui/workshop_landscape.psd",
+                    "input": "gui/workshop_thumbnail.psd",
                     "output": "addonimage.jpg"
                 },
                 {
@@ -141,11 +167,17 @@
             ]
         },
         "Zoey": {
-            "qc": "teenangst.qc",
+            "qc": "_release.qc",
             "compile": true,
+            "definevariable": {
+                "survivorName": {"value": "zoey"},
+                "modelFilePath": {"value": "survivors/survivor_teenangst.mdl", "targets": ["qc"]},
+                "modelLightFilePath": {"value": "survivors/survivor_teenangst_light.mdl", "targets": ["light"]},
+                "modelArmsFilePath": {"value": "weapons/arms/v_arms_zoey.mdl", "targets": ["arms"]}
+            },
             "submodels": {
-                "arms": "teenangst_arms.qc",
-                "light": "teenangst_light.qc"
+                "arms": "_release_arms.qc",
+                "light": "_release.qc"
             },
             "subdata": [
                 {
@@ -156,7 +188,7 @@
                     }
                 },
                 {
-                    "input": "gui/workshop_landscape.psd",
+                    "input": "gui/workshop_thumbnail.psd",
                     "output": "addonimage.jpg"
                 },
                 {
@@ -186,10 +218,15 @@
             ]
         },
         "Coach": {
-            "qc": "coach.qc",
+            "qc": "_release.qc",
             "compile": true,
+            "definevariable": {
+                "survivorName": {"value": "coach"},
+                "modelFilePath": {"value": "survivors/survivor_coach.mdl", "targets": ["qc"]},
+                "modelArmsFilePath": {"value": "weapons/arms/v_arms_coach_new.mdl", "targets": ["arms"]}
+            },
             "submodels": {
-                "arms": "coach_arms.qc"
+                "arms": "_release_arms.qc"
             },
             "subdata": [
                 {
@@ -200,7 +237,7 @@
                     }
                 },
                 {
-                    "input": "gui/workshop_landscape.psd",
+                    "input": "gui/workshop_thumbnail.psd",
                     "output": "addonimage.jpg"
                 },
                 {
@@ -230,10 +267,15 @@
             ]
         },
         "Ellis": {
-            "qc": "mechanic.qc",
+            "qc": "_release.qc",
             "compile": true,
+            "definevariable": {
+                "survivorName": {"value": "ellis"},
+                "modelFilePath": {"value": "survivors/survivor_mechanic.mdl", "targets": ["qc"]},
+                "modelArmsFilePath": {"value": "weapons/arms/v_arms_mechanic_new.mdl", "targets": ["arms"]}
+            },
             "submodels": {
-                "arms": "mechanic_arms.qc"
+                "arms": "_release_arms.qc"
             },
             "subdata": [
                 {
@@ -244,7 +286,7 @@
                     }
                 },
                 {
-                    "input": "gui/workshop_landscape.psd",
+                    "input": "gui/workshop_thumbnail.psd",
                     "output": "addonimage.jpg"
                 },
                 {
@@ -274,10 +316,15 @@
             ]
         },
         "Nick": {
-            "qc": "gambler.qc",
+            "qc": "_release.qc",
             "compile": true,
+            "definevariable": {
+                "survivorName": {"value": "nick"},
+                "modelFilePath": {"value": "survivors/survivor_gambler.mdl", "targets": ["qc"]},
+                "modelArmsFilePath": {"value": "weapons/arms/v_arms_gambler_new.mdl", "targets": ["arms"]}
+            },
             "submodels": {
-                "arms": "gambler_arms.qc"
+                "arms": "_release_arms.qc"
             },
             "subdata": [
                 {
@@ -288,7 +335,7 @@
                     }
                 },
                 {
-                    "input": "gui/workshop_landscape.psd",
+                    "input": "gui/workshop_thumbnail.psd",
                     "output": "addonimage.jpg"
                 },
                 {
@@ -318,10 +365,15 @@
             ]
         },
         "Rochelle": {
-            "qc": "producer.qc",
+            "qc": "_release.qc",
             "compile": true,
+            "definevariable": {
+                "survivorName": {"value": "rochelle"},
+                "modelFilePath": {"value": "survivors/survivor_producer.mdl", "targets": ["qc"]},
+                "modelArmsFilePath": {"value": "weapons/arms/v_arms_producer_new.mdl", "targets": ["arms"]}
+            },
             "submodels": {
-                "arms": "producer_arms.qc"
+                "arms": "_release_arms.qc"
             },
             "subdata": [
                 {
@@ -332,7 +384,7 @@
                     }
                 },
                 {
-                    "input": "gui/workshop_landscape.psd",
+                    "input": "gui/workshop_thumbnail.psd",
                     "output": "addonimage.jpg"
                 },
                 {
@@ -363,7 +415,7 @@
         }
     },
     "data": {
-        "AssetShared": [
+        "SharedAssets": [
             {
                 "input": "scripts/addoninfo.txt",
                 "output": "addoninfo.txt",
@@ -372,7 +424,7 @@
                 }
             },
             {
-                "input": "gui/workshop_landscape.psd",
+                "input": "gui/workshop_thumbnail.psd",
                 "output": "addonimage.jpg"
             }
         ]

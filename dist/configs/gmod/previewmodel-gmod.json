@@ -1,0 +1,17 @@
+{
+    "header": "ValveModel",
+    "studiomdl": "D:/Portable Program Files/nekomdl/nekomdl.exe",
+    "gameinfo": "D:/Program Files/Steam/steamapps/common/GarrysMod/garrysmod/gameinfo.txt",
+    "includedirs": [
+        "D:/Development/game-mods/garrysmod/player/.modules/v1.0/shared_prefabs/"
+    ],
+    "model": {
+        "PreviewModel": {
+            "qc": "_preview.qc",
+            "compile": true,
+            "submodels" : {
+                "arms" : "_release_arms.qc"
+            }
+        }
+    }
+}

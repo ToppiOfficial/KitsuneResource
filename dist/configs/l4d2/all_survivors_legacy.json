@@ -3,23 +3,15 @@
     "studiomdl": "D:/Portable Program Files/nekomdl/nekomdl.exe",
     "gameinfo": "D:/Program Files/Steam/steamapps/common/Left 4 Dead 2/left4dead2/gameinfo.txt",
     "vtfcmd": "D:/Portable Program Files/vtfreloaded/VTFCmd.exe",
-    "vpk": "D:/Program Files/Steam/steamapps/common/Left 4 Dead 2/bin/vpk.exe",
-    "definevariable": {
-        "RigtoSurvivorAnim": "zoey"
-    },
+    "packager": "D:/Program Files/Steam/steamapps/common/Left 4 Dead 2/bin/vpk.exe",
+    
     "model": {
         "Bill": {
-            "qc": "_release.qc",
+            "qc": "namvet.qc",
             "compile": true,
-            "definevariable": {
-                "survivorName": {"value": "bill"},
-                "modelFilePath": {"value": "survivors/survivor_namvet.mdl", "targets": ["qc"]},
-                "modelArmsFilePath": {"value": "weapons/arms/v_arms_bill.mdl", "targets": ["arms"]},
-                "modelDeathPoseFilePath": {"value": "survivors/NamVet/namvet_deathpose.mdl", "targets": ["deathpose"]}
-            },
             "submodels": {
-                "arms": "_release_arms.qc",
-                "deathpose": "_release.qc"
+                "arms": "namvet_arms.qc",
+                "deathpose": "namvet_deathpose.qc"
             },
             "subdata": [
                 {
@@ -60,17 +52,11 @@
             ]
         },
         "Francis": {
-            "qc": "_release.qc",
+            "qc": "biker.qc",
             "compile": true,
-            "definevariable": {
-                "survivorName": {"value": "francis"},
-                "modelFilePath": {"value": "survivors/survivor_biker.mdl", "targets": ["qc"]},
-                "modelLightFilePath": {"value": "survivors/survivor_biker_light.mdl", "targets": ["light"]},
-                "modelArmsFilePath": {"value": "weapons/arms/v_arms_francis.mdl", "targets": ["arms"]}
-            },
             "submodels": {
-                "arms": "_release_arms.qc",
-                "light": "_release.qc"
+                "arms": "biker_arms.qc",
+                "light": "biker_light.qc"
             },
             "subdata": [
                 {
@@ -111,15 +97,10 @@
             ]
         },
         "Louis": {
-            "qc": "_release.qc",
+            "qc": "manager.qc",
             "compile": true,
-            "definevariable": {
-                "survivorName": {"value": "louis"},
-                "modelFilePath": {"value": "survivors/survivor_manager.mdl", "targets": ["qc"]},
-                "modelArmsFilePath": {"value": "weapons/arms/v_arms_louis.mdl", "targets": ["arms"]}
-            },
             "submodels": {
-                "arms": "_release_arms.qc"
+                "arms": "manager_arms.qc"
             },
             "subdata": [
                 {
@@ -160,17 +141,11 @@
             ]
         },
         "Zoey": {
-            "qc": "_release.qc",
+            "qc": "teenangst.qc",
             "compile": true,
-            "definevariable": {
-                "survivorName": {"value": "zoey"},
-                "modelFilePath": {"value": "survivors/survivor_teenangst.mdl", "targets": ["qc"]},
-                "modelLightFilePath": {"value": "survivors/survivor_teenangst_light.mdl", "targets": ["light"]},
-                "modelArmsFilePath": {"value": "weapons/arms/v_arms_zoey.mdl", "targets": ["arms"]}
-            },
             "submodels": {
-                "arms": "_release_arms.qc",
-                "light": "_release.qc"
+                "arms": "teenangst_arms.qc",
+                "light": "teenangst_light.qc"
             },
             "subdata": [
                 {
@@ -211,15 +186,10 @@
             ]
         },
         "Coach": {
-            "qc": "_release.qc",
+            "qc": "coach.qc",
             "compile": true,
-            "definevariable": {
-                "survivorName": {"value": "coach"},
-                "modelFilePath": {"value": "survivors/survivor_coach.mdl", "targets": ["qc"]},
-                "modelArmsFilePath": {"value": "weapons/arms/v_arms_coach_new.mdl", "targets": ["arms"]}
-            },
             "submodels": {
-                "arms": "_release_arms.qc"
+                "arms": "coach_arms.qc"
             },
             "subdata": [
                 {
@@ -260,15 +230,10 @@
             ]
         },
         "Ellis": {
-            "qc": "_release.qc",
+            "qc": "mechanic.qc",
             "compile": true,
-            "definevariable": {
-                "survivorName": {"value": "ellis"},
-                "modelFilePath": {"value": "survivors/survivor_mechanic.mdl", "targets": ["qc"]},
-                "modelArmsFilePath": {"value": "weapons/arms/v_arms_mechanic_new.mdl", "targets": ["arms"]}
-            },
             "submodels": {
-                "arms": "_release_arms.qc"
+                "arms": "mechanic_arms.qc"
             },
             "subdata": [
                 {
@@ -309,15 +274,10 @@
             ]
         },
         "Nick": {
-            "qc": "_release.qc",
+            "qc": "gambler.qc",
             "compile": true,
-            "definevariable": {
-                "survivorName": {"value": "nick"},
-                "modelFilePath": {"value": "survivors/survivor_gambler.mdl", "targets": ["qc"]},
-                "modelArmsFilePath": {"value": "weapons/arms/v_arms_gambler_new.mdl", "targets": ["arms"]}
-            },
             "submodels": {
-                "arms": "_release_arms.qc"
+                "arms": "gambler_arms.qc"
             },
             "subdata": [
                 {
@@ -358,15 +318,10 @@
             ]
         },
         "Rochelle": {
-            "qc": "_release.qc",
+            "qc": "producer.qc",
             "compile": true,
-            "definevariable": {
-                "survivorName": {"value": "rochelle"},
-                "modelFilePath": {"value": "survivors/survivor_producer.mdl", "targets": ["qc"]},
-                "modelArmsFilePath": {"value": "weapons/arms/v_arms_producer_new.mdl", "targets": ["arms"]}
-            },
             "submodels": {
-                "arms": "_release_arms.qc"
+                "arms": "producer_arms.qc"
             },
             "subdata": [
                 {
