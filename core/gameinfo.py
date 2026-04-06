@@ -28,11 +28,13 @@ def get_game_search_paths(gameinfo_file: str | Path) -> list[Path]:
 
     search_paths_block = search_paths_match.group(1)
     # Find all Game entries
-    game_entries = re.findall(r'Game\s+"?([^\s"]+)"?', search_paths_block, re.IGNORECASE)
+    game_entries = re.findall(r'game(?:\+\w+)*\s+"?([^\s"]+)"?', search_paths_block, re.IGNORECASE)
 
     for entry in game_entries:
-        if entry == "|gameinfo_path|.":
+        if "|gameinfo_path|" in entry:
             paths.append(base_dir)
+        elif entry.startswith("|"):
+            continue  # skip other special like |all_source_engine_paths| TODO: implement it!
         else:
             candidate = (base_dir / entry).resolve()
             if candidate.exists():

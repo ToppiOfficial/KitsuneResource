@@ -32,7 +32,7 @@
         "exponent": {
             "input": ".*(^|[_-])(e|exponent|phong)([_-].*)?\\.(psd|png|tga|jpg|dds)$",
             "vtf":{
-                "encoder_args": ["-format", "BGR888", "-alphaformat", "BGRA8888", "-rclampwidth", "1024", "-rclampheight", "1024"]
+                "encoder_args": ["-format", "BGR888", "-alphaformat", "BGRA8888", "-rclampwidth", "4096", "-rclampheight", "4096"]
             }
         },
         "mrao": {

@@ -5,7 +5,7 @@ from datetime import datetime
 from functools import wraps
 from typing import List, Optional
 
-SOFTVERSION = 2.32
+SOFTVERSION = 2.33
 DEFAULT_COMPILE_ROOT  = 'compiled_files'
 
 SUPPORTED_TEXT_FORMAT = (

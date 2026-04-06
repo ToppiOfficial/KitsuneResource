@@ -5,12 +5,15 @@
     "includedirs": [
         "D:/Development/game-mods/garrysmod/player/.modules/v1.0/shared_prefabs/"
     ],
+    "definevariable": {
+        "modelFilePath": "previewmodel"
+    },
     "model": {
         "PreviewModel": {
             "qc": "_preview.qc",
             "compile": true,
             "submodels" : {
-                "arms" : "_release_arms.qc"
+                "arms": "_release_player_arms.qc"
             }
         }
     }

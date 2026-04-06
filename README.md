@@ -31,11 +31,6 @@ python build.py
 python main.py [options] path/to/config.json or kitsuneresource.exe [options] path/to/config.json
 ```
 
-### Sample Configurations
-```
-Refer to sample_json/ directory for example configurations
-```
-
 ## Command-Line Arguments
 
 ### Global Options
@@ -66,32 +61,9 @@ Refer to sample_json/ directory for example configurations
 | `--allow_reprocess` | Allow the same source file to be processed multiple times in a single run. |
 | `--recursive` | Search for input texture files recursively through all subfolders. |
 
-## How It Works
+## Known Issues
 
-### Model Compilation Flow
-1. Parse JSON configuration and validate tool paths
-2. Extract game search paths from `gameinfo.txt`
-3. Compile QC files using `studiomdl.exe`
-4. Parse QC for materials (`$cdmaterials`, `$texturegroup`, `$renamematerial`)
-5. Locate VMT/VTF files in game search paths
-6. Copy materials and textures to output folder
-7. Optionally localize VMT paths for self-contained packages
-8. Process additional data files
-9. Package into VPK archives if requested
-
-### Material Localization
-When enabled, VMT files are rewritten to use relative paths:
-```vmt
-Before: $basetexture "models/weapons/shared/texture"
-After:  $basetexture "shared/texture"
-```
-
-### QC Material
-- Materials dumped by `studiomdl.exe` during compilation
-- `$cdmaterials` search paths
-- `$texturegroup skinfamilies` alternate skins
-- `$renamematerial` mappings
-- `$include` files (recursive)
+- $definevariable and similar gets passed down to submodels incorrectly causing "defined" yet empty value for flatten qc mode (Workaround: Use definevariable in JSON for values getting passed along to every QC or used unique naming for submodels)
 
 ## Acknowledgments
 
