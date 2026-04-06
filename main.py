@@ -116,11 +116,13 @@ class CompileFolderManager:
 class DataProcessor:
     """Processes various data items (files, textures, conversions)"""
     
-    def __init__(self, compile_root: Path, vtfcmd_exe: Optional[Path], args, logger: Logger):
+    def __init__(self, compile_root: Path, vtfcmd_exe: Optional[Path], args, logger: Logger,
+             include_dirs: list = None):
         self.compile_root = compile_root
         self.vtfcmd_exe = vtfcmd_exe
         self.args = args
         self.logger = PrefixedLogger(logger, "DATA")
+        self.include_dirs = include_dirs or []
         self.handlers = [
             self._handle_text_replacement,
             self._handle_vtf_export,
@@ -197,8 +199,9 @@ class DataProcessor:
                 self.logger.error(f"Failed to export VTF: {input_path} -> {output_path} | {e}")
         
         if vtf_data and vtf_data.get("vmt"):
-            VMTCreator.create_from_template(vtf_data["vmt"], output_path, 
-                                          self.compile_root, self.args, self.logger)
+            VMTCreator.create_from_template(vtf_data["vmt"], output_path,
+                                self.compile_root, self.args, self.logger,
+                                include_dirs=self.include_dirs)
         return True
     
     def _handle_image_conversion(self, item: dict, input_path: Path, output_path: Path,
@@ -438,7 +441,8 @@ class ModelCompiler:
     def _process_subdata(self, model_data: dict, output_dir: Path, compile_root: Path):
         subdata = model_data.get("subdata", [])
         if subdata:
-            processor = DataProcessor(compile_root, self.vtfcmd_exe, self.args, self.logger)
+            processor = DataProcessor(compile_root, self.vtfcmd_exe, self.args, self.logger,
+                                    include_dirs=self.global_includedirs)
             processor.process_items(subdata, output_dir)
 
 class MaterialSetCopier:
@@ -573,7 +577,9 @@ class ValveModelPipeline:
                                       search_paths, self.logger)
     
     def _process_data_sections(self, compile_root: Path, vtfcmd_exe: Optional[Path]):
-        processor = DataProcessor(compile_root, vtfcmd_exe, self.args, self.logger)
+        include_dirs = self.config.get("includedirs", [])
+        processor = DataProcessor(compile_root, vtfcmd_exe, self.args, self.logger,
+                                include_dirs=include_dirs)
         for folder_name, items in self.config.get("data", {}).items():
             output_dir = compile_root if self.args.single_addon else compile_root / folder_name
             processor.process_items(items, output_dir)

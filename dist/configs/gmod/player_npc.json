@@ -5,7 +5,8 @@
     "vtfcmd": "D:/Portable Program Files/vtfreloaded/VTFCmd.exe",
     "packager": "D:/Program Files/Steam/steamapps/common/GarrysMod/bin/win64/gmad.exe",
     "includedirs": [
-        "D:/Development/game-mods/garrysmod/player/.modules/v1.0/shared_prefabs/"
+        "D:/Development/game-mods/garrysmod/player/.modules/v1.0/shared_prefabs/",
+        "D:/Development/game-mods/garrysmod/player/.modules/v1.0/"
     ],
     "addonfolder" : "addonroot",
     "model": {
