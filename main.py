@@ -150,8 +150,8 @@ class DataProcessor:
         
         self._copy_file(input_path, output_path)
     
-    def _handle_text_replacement(self, item: dict, input_path: Path, output_path: Path,
-                                input_str: str, output_str: str) -> bool:
+    def _handle_text_replacement(self, item: dict, input_path: Path, output_path: Path, input_str: str, output_str: str) -> bool:
+
         if not (input_str.endswith(SUPPORTED_TEXT_FORMAT) and 
                 output_str.endswith(SUPPORTED_TEXT_FORMAT)):
             return False
@@ -173,8 +173,8 @@ class DataProcessor:
             self.logger.error(f"Failed string replace: {input_path} -> {output_path} | {e}")
             return True
     
-    def _handle_vtf_export(self, item: dict, input_path: Path, output_path: Path,
-                          input_str: str, output_str: str) -> bool:
+    def _handle_vtf_export(self, item: dict, input_path: Path, output_path: Path, input_str: str, output_str: str) -> bool:
+        
         if not ((input_str.endswith(SUPPORTED_IMAGE_FORMAT) or input_str.endswith('.vtf')) 
                 and output_str.endswith(".vtf")):
             return False
@@ -195,17 +195,15 @@ class DataProcessor:
                     silent=True
                 )
                 self.logger.info(f"VTF export: {input_path.name} -> {output_path.name}")
+            
             except Exception as e:
                 self.logger.error(f"Failed to export VTF: {input_path} -> {output_path} | {e}")
         
         if vtf_data and vtf_data.get("vmt"):
-            VMTCreator.create_from_template(vtf_data["vmt"], output_path,
-                                self.compile_root, self.args, self.logger,
-                                include_dirs=self.include_dirs)
+            VMTCreator.create_from_template(vtf_data["vmt"], output_path, self.compile_root, self.args, self.logger, include_dirs=self.include_dirs)
         return True
     
-    def _handle_image_conversion(self, item: dict, input_path: Path, output_path: Path,
-                                input_str: str, output_str: str) -> bool:
+    def _handle_image_conversion(self, item: dict, input_path: Path, output_path: Path, input_str: str, output_str: str) -> bool:
         if not (input_str.endswith(SUPPORTED_IMAGE_FORMAT) and 
                 output_str.endswith(SUPPORTED_IMAGE_FORMAT)):
             return False
@@ -225,9 +223,9 @@ class DataProcessor:
 class ModelCompiler:
     """Handles model compilation and material processing"""
     
-    def __init__(self, studiomdl_exe: Path, search_paths: List[Path], 
-                 vtfcmd_exe: Optional[Path], gameinfo_dir: Optional[Path], args, logger: Logger,
-                 global_includedirs: list = None):
+    def __init__(self, studiomdl_exe: Path, search_paths: List[Path],  vtfcmd_exe: Optional[Path], 
+                 gameinfo_dir: Optional[Path], args, logger: Logger, global_includedirs: list = None):
+        
         self.studiomdl_exe = studiomdl_exe
         self.search_paths = search_paths
         self.vtfcmd_exe = vtfcmd_exe
@@ -237,7 +235,7 @@ class ModelCompiler:
         self.global_includedirs = global_includedirs if global_includedirs is not None else []
     
     def _parse_model_defines(self, model_define_vars: dict) -> tuple[dict, dict]:
-        """Parses definevariable from config into regular and targeted defines."""
+
         regular_model_defines = {}
         targeted_model_defines = {}
 
@@ -254,21 +252,18 @@ class ModelCompiler:
         
         return regular_model_defines, targeted_model_defines
 
-    def _get_qc_defines(self, target_name: str, regular_vars: dict, 
-                        targeted_vars: dict, global_vars: dict) -> dict:
-        """Constructs a dictionary of variables for a specific QC."""
+    def _get_qc_defines(self, target_name: str, regular_vars: dict, targeted_vars: dict, global_vars: dict) -> dict:
+
         defines = global_vars.copy()
         defines.update(regular_vars)
         if target_name in targeted_vars:
             defines.update(targeted_vars[target_name])
         return defines
 
-    def _compile_single_qc(self, qc_path: Path, base_name: str, variables: dict, 
-                           output_dir: Optional[Path], game_dir: Optional[Path], logger: Logger,
-                           include_dirs: list = None):
-        """Compiles a single QC file, handling temp file creation and cleanup."""
-        temp_qc = self._create_temp_qc(qc_path, logger, base_name=base_name, variables=variables,
-                                    include_dirs=include_dirs)
+    def _compile_single_qc(self, qc_path: Path, base_name: str, variables: dict, output_dir: Optional[Path], 
+                           game_dir: Optional[Path], logger: Logger, include_dirs: list = None):
+        
+        temp_qc = self._create_temp_qc(qc_path, logger, base_name=base_name, variables=variables, include_dirs=include_dirs)
         
         try:
             success, _, dumped_materials = model_compile_studiomdl(
@@ -395,8 +390,7 @@ class ModelCompiler:
                 dumped_materials.update(set(sub_dumped))
                 logger.info(f"Compiled {sub_qc_path.name} ({len(sub_dumped)} materials)")
     
-    def _process_materials(self, qc_path: Path, dumped_materials: Set, 
-                      output_dir: Path, compile_root: Path, logger: Logger):
+    def _process_materials(self, qc_path: Path, dumped_materials: Set, output_dir: Path, compile_root: Path, logger: Logger):
         mode = self.args.mat_mode
         
         if mode == 0:
@@ -441,16 +435,14 @@ class ModelCompiler:
     def _process_subdata(self, model_data: dict, output_dir: Path, compile_root: Path):
         subdata = model_data.get("subdata", [])
         if subdata:
-            processor = DataProcessor(compile_root, self.vtfcmd_exe, self.args, self.logger,
-                                    include_dirs=self.global_includedirs)
+            processor = DataProcessor(compile_root, self.vtfcmd_exe, self.args, self.logger, include_dirs=self.global_includedirs)
             processor.process_items(subdata, output_dir)
 
 class MaterialSetCopier:
     """Copies material sets"""
     
     @staticmethod
-    def copy_set(set_name: str, set_data: dict, compile_root: Path, 
-                 search_paths: List[Path], logger: Logger):
+    def copy_set(set_name: str, set_data: dict, compile_root: Path, search_paths: List[Path], logger: Logger):
         mat_logger = PrefixedLogger(logger, "MATERIAL")
         vmt_list = set_data.get("materials", [])
         
@@ -549,7 +541,6 @@ class ValveModelPipeline:
                            vtfcmd_exe, gameinfo_dir)
         
         if self.args.game:
-            #self.logger.info("--game mode: Compilation complete. Skipping post-processing")
             return
         
         self._process_material_sets(compile_root, search_paths)
@@ -558,28 +549,26 @@ class ValveModelPipeline:
         if self.args.package_files:
             self._package_archives(compile_root, packager_exe)
     
-    def _compile_models(self, compile_root: Path, studiomdl_exe: Path, 
-                       search_paths: List[Path], vtfcmd_exe: Optional[Path], 
-                       gameinfo_dir: Optional[Path]):
+    def _compile_models(self, compile_root: Path, studiomdl_exe: Path, search_paths: List[Path], vtfcmd_exe: Optional[Path], gameinfo_dir: Optional[Path]):
         
         global_includedirs = self.config.get("includedirs", [])
         global_define_vars = self.config.get("definevariable", {})
 
-        compiler = ModelCompiler(studiomdl_exe, search_paths, vtfcmd_exe, 
-                                gameinfo_dir, self.args, self.logger, global_includedirs=global_includedirs)
+        compiler = ModelCompiler(studiomdl_exe, search_paths, vtfcmd_exe, gameinfo_dir, self.args, self.logger,
+                                 global_includedirs=global_includedirs)
 
         for model_name, model_data in self.config.get("model", {}).items():
             compiler.compile_model(model_name, model_data, compile_root, global_vars=global_define_vars)
     
     def _process_material_sets(self, compile_root: Path, search_paths: List[Path]):
+
         for set_name, set_data in self.config.get("material", {}).items():
-            MaterialSetCopier.copy_set(set_name, set_data, compile_root, 
-                                      search_paths, self.logger)
+            MaterialSetCopier.copy_set(set_name, set_data, compile_root, search_paths, self.logger)
     
     def _process_data_sections(self, compile_root: Path, vtfcmd_exe: Optional[Path]):
         include_dirs = self.config.get("includedirs", [])
-        processor = DataProcessor(compile_root, vtfcmd_exe, self.args, self.logger,
-                                include_dirs=include_dirs)
+        processor = DataProcessor(compile_root, vtfcmd_exe, self.args, self.logger, include_dirs=include_dirs)
+
         for folder_name, items in self.config.get("data", {}).items():
             output_dir = compile_root if self.args.single_addon else compile_root / folder_name
             processor.process_items(items, output_dir)
@@ -659,8 +648,7 @@ class ValveTexturePipeline:
         input_path = root_dir / pattern
         return [input_path] if input_path.exists() else []
     
-    def _process_texture_file(self, src_file: Path, entry: dict, 
-                             root_dir: Path, vtfcmd: Path):
+    def _process_texture_file(self, src_file: Path, entry: dict, root_dir: Path, vtfcmd: Path):
         src_file_resolved = src_file.resolve()
         
         if (not getattr(self.args, "allow_reprocess", False) and 
@@ -700,8 +688,7 @@ class ValveTexturePipeline:
         
         return output_path.stat().st_mtime == src_file.stat().st_mtime
     
-    def _convert_to_vtf(self, src_file: Path, output_path: Path, 
-                       entry: dict, vtfcmd: Path):
+    def _convert_to_vtf(self, src_file: Path, output_path: Path, entry: dict, vtfcmd: Path):
         vtf_settings = entry.get("vtf", {})
         flags = vtf_settings.get("flags")
         extra_args = vtf_settings.get("encoder_args")

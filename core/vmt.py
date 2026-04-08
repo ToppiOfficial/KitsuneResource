@@ -9,11 +9,9 @@ class VMTCreator:
     """Creates VMT files from templates"""
     
     @staticmethod
-    def create_from_template(vmt_template_json, vtf_path: Path, compile_root: Path, 
-                           args, logger: Logger, include_dirs: list = None):
-        vmt_template = VMTCreator._resolve_template_path(
-            vmt_template_json, args.config_path, args.basedir, include_dirs
-        )
+    def create_from_template(vmt_template_json, vtf_path: Path, compile_root: Path, args, logger: Logger, include_dirs: list = None):
+        
+        vmt_template = VMTCreator._resolve_template_path(vmt_template_json, args.config_path, args.basedir, include_dirs)
         
         if vmt_template is None:
             logger.warn(f"VMT template not found in project or includedirs, skipping: {vmt_template_json}")
@@ -31,9 +29,10 @@ class VMTCreator:
         logger.info(f"VMT created: {vmt_dst.relative_to(compile_root)}")
     
     @staticmethod
-    def _resolve_template_path(vmt_template_json, config_path, basedir, 
-                                include_dirs: Optional[list]) -> Optional[Path]:
+    def _resolve_template_path(vmt_template_json, config_path, basedir, include_dirs: Optional[list]) -> Optional[Path]:
+        
         primary = resolve_json_path(vmt_template_json, config_path, basedir)
+        
         if primary.exists():
             return primary
         
@@ -46,6 +45,7 @@ class VMTCreator:
 
     @staticmethod
     def _get_relative_path(vtf_path: Path, compile_root: Path, single_addon: bool = False) -> str:
+        
         if single_addon:
             materials_root = compile_root
         else:
@@ -57,6 +57,7 @@ class VMTCreator:
             if vtf_rel_posix.startswith("materials/"):
                 vtf_rel_posix = vtf_rel_posix[len("materials/"):]
             return vtf_rel_posix
+        
         except ValueError:
             pass
         

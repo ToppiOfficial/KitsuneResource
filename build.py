@@ -50,8 +50,8 @@ def build_executable():
     
     try:
         subprocess.check_call(cmd)
-        print(f"\n✓ Build successful!")
-        print(f"✓ Executable location: dist/{EXE_NAME}.exe" if sys.platform == "win32" else f"dist/{EXE_NAME}")
+        print(f"\nBuild successful!")
+        print(f"Executable location: dist/{EXE_NAME}.exe" if sys.platform == "win32" else f"dist/{EXE_NAME}")
         return True
     except subprocess.CalledProcessError as e:
         print(f"\n✗ Build failed with error code {e.returncode}")
