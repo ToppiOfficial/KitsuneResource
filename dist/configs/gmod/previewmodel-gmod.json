@@ -6,7 +6,13 @@
         "D:/Development/game-mods/garrysmod/player/.modules/v1.0/shared_prefabs/"
     ],
     "definevariable": {
-        "modelFilePath": "previewmodel"
+        "modelFilePath": "previewmodel",
+        "modelFilePath1": "previewmodel1",
+        "modelFilePath2": "previewmodel2",
+        "modelFilePath3": "previewmodel3",
+        "modelFilePath4": "previewmodel4",
+        "modelFilePath5": "previewmodel5",
+        "modelFilePath6": "previewmodel6"
     },
     "model": {
         "PreviewModel": {

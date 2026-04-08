@@ -11,30 +11,29 @@ def get_game_search_paths(gameinfo_file: str | Path) -> list[Path]:
     Returns:
         List of absolute Paths where game assets (materials, models, etc.) may exist.
     """
+
     gameinfo_file = Path(gameinfo_file).resolve()
     if not gameinfo_file.exists():
         raise FileNotFoundError(f"{gameinfo_file} does not exist")
 
-    base_dir = gameinfo_file.parent.parent  # one level up from the folder containing gameinfo.txt
+    base_dir = gameinfo_file.parent.parent
     paths = []
 
     with open(gameinfo_file, "r", encoding="utf-8") as f:
         content = f.read()
 
-    # Extract SearchPaths block
     search_paths_match = re.search(r"SearchPaths\s*{([^}]*)}", content, re.DOTALL | re.IGNORECASE)
     if not search_paths_match:
-        return [base_dir]  # fallback
+        return [base_dir]
 
     search_paths_block = search_paths_match.group(1)
-    # Find all Game entries
     game_entries = re.findall(r'game(?:\+\w+)*\s+"?([^\s"]+)"?', search_paths_block, re.IGNORECASE)
 
     for entry in game_entries:
         if "|gameinfo_path|" in entry:
             paths.append(base_dir)
-        elif entry.startswith("|"):
-            continue  # skip other special like |all_source_engine_paths| TODO: implement it!
+        elif entry.startswith("|") or "addon" in entry.lower():
+            continue
         else:
             candidate = (base_dir / entry).resolve()
             if candidate.exists():

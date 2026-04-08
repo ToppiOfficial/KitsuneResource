@@ -398,12 +398,12 @@ class ModelCompiler:
             return
         
         mat_logger = PrefixedLogger(self.logger, "MATERIAL")
+        localize = not self.args.no_mat_local
 
         if getattr(self.args, 'single_addon', False):
             copy_target = compile_root
-            mat_logger.info("Single-addon mode: copying materials to addon root.")
+            mat_logger.info(f"Single-addon mode: copying materials to addon root (localization: {'on' if localize else 'off'}).")
         else:
-            localize = not self.args.no_mat_local
             if mode == 1:
                 copy_target = output_dir
                 mat_logger.info(f"Material mode 'raw-local': copying to model folder (localization: {'on' if localize else 'off'}).")
@@ -427,7 +427,7 @@ class ModelCompiler:
             material_to_vmt,
             copy_target,
             self.search_paths,
-            localize_data=True,
+            localize_data=localize,
             logger=mat_logger,
         )
         mat_logger.info(f"Material copy complete ({len(copied_files)} files).")
