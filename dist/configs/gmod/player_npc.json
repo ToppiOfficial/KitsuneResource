@@ -9,26 +9,7 @@
         "D:/Development/game-mods/garrysmod/player/.modules/v1.0/"
     ],
     "addonfolder" : "addonroot",
-    "model": {
-        "player": {
-            "qc": "_release_player.qc",
-            "compile": true,
-            "submodels": {
-                "arms": "_release_player_arms.qc"
-            }
-        },
-        "npc": {
-            "qc": "_release_npc.qc",
-            "compile": true
-        }
-    },
     "data": {
-        "addon-autorunlua": [
-            {
-                "input": "scripts/autorun.lua",
-                "output": "lua/autorun/custom-player-npc.lua"
-            }
-        ],
         "addon-json": [
             {
                 "input": "scripts/addon.json",

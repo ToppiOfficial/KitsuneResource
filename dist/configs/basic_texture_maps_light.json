@@ -1,0 +1,51 @@
+{
+    "header": "ValveTexture",
+    "vtfcmd": "D:/Portable Program Files/vtfreloaded/VTFCmd.exe",
+    "vtf": {
+        "LightWarp": {
+            "input": ".*(^|[_-])warp([_-].*)?\\.(psd|png|tga|jpg|dds)$",
+            "vtf": {
+                "flags" : ["CLAMPS", "CLAMPT"],
+                "encoder_args": ["-format", "BGR888", "-alphaformat", "BGRA8888", "-rclampwidth", "256", "-rclampheight", "16"]
+            }
+        },
+        "eye": {
+            "input": ".*(^|[_-])eye([_-].*)?\\.(psd|png|tga|jpg|dds)$",
+            "vtf": {
+                "flags" : ["CLAMPS", "CLAMPT"],
+                "encoder_args": ["-format", "DXT1", "-alphaformat", "DXT5", "-rclampwidth", "512", "-rclampheight", "512"]
+            }
+        },
+        "diffuse": {
+            "input": ".*[_-](d|color|rgb)\\.(psd|png|tga|jpg|dds)$",
+            "vtf":{
+                "encoder_args": ["-format", "DXT1", "-alphaformat", "DXT5", "-rclampwidth", "4096", "-rclampheight", "4096"]
+            }
+        },
+        "normal": {
+            "input": ".*[_-](n|normal)\\.(psd|png|tga|jpg|dds)$",
+            "vtf": {
+                "flags": ["NORMAL"],
+                "encoder_args": ["-format", "DXT1", "-alphaformat", "DXT5", "-rclampwidth", "4096", "-rclampheight", "4096"]
+            }
+        },
+        "exponent": {
+            "input": ".*(^|[_-])(e|exponent|phong)([_-].*)?\\.(psd|png|tga|jpg|dds)$",
+            "vtf":{
+                "encoder_args": ["-format", "DXT1", "-alphaformat", "DXT5", "-rclampwidth", "4096", "-rclampheight", "4096"]
+            }
+        },
+        "mrao": {
+            "input": ".*(^|[_-])mrao([_-].*)?\\.(psd|png|tga|jpg|dds)$",
+            "vtf":{
+                "encoder_args": ["-format", "DXT1", "-alphaformat", "DXT5", "-rclampwidth", "4096", "-rclampheight", "4096"]
+            }
+        },
+        "emissive": {
+            "input": ".*[_-]em(_flow|_base)?\\.(psd|png|tga|jpg|dds)$",
+            "vtf": {
+                "encoder_args": ["-format", "DXT1", "-alphaformat", "DXT5", "-rclampwidth", "4096", "-rclampheight", "4096"]
+            }
+        }
+    }
+}

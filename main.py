@@ -798,26 +798,30 @@ def main():
         
         configs_dir = base_dir / "configs"
         config_filename = config_path.name
-        
-        # Safeguard against empty filename causing rglob to match directories
+
         if not config_filename:
             logger.warn(f"Could not determine a filename from '{config_path_str}'.")
         else:
-            logger.info(f"Config file not found at '{config_path_str}'. Searching for '{config_filename}' in '{configs_dir}'...")
-            
+            logger.info(f"Config file not found at '{config_path_str}'. Searching in '{configs_dir}'...")
+
             if configs_dir.is_dir():
-                found_files = [f for f in configs_dir.rglob(config_filename) if f.is_file()]
+                # Prefer exact relative path match first (e.g. configs/l4d2/previewmodel.json)
+                candidate = configs_dir / config_path
+                if candidate.is_file():
+                    found_files = [candidate]
+                else:
+                    found_files = [f for f in configs_dir.rglob(config_filename) if f.is_file()]
 
                 if found_files:
                     if len(found_files) > 1:
                         logger.warn(f"Found multiple '{config_filename}' files. Using the first one:")
                         for f in found_files:
                             logger.warn(f"  - {f}")
-                    
+
                     args.config_path = str(found_files[0])
                     logger.info(f"Found config file: {args.config_path}")
                 else:
-                     logger.warn(f"Could not find a file named '{config_filename}' in subfolders of '{configs_dir}'.")
+                    logger.warn(f"Could not find '{config_path_str}' in subfolders of '{configs_dir}'.")
             else:
                 logger.warn(f"The 'configs' directory does not exist at '{configs_dir}'.")
 

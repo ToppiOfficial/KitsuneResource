@@ -1,0 +1,24 @@
+{
+    "header": "ValveModel",
+    "studiomdl": "D:/Portable Program Files/nekomdl/nekomdl.exe",
+    "gameinfo": "D:/Program Files/Steam/steamapps/common/GarrysMod/garrysmod/gameinfo.txt",
+    "includedirs": [
+        "D:/Development/game-mods/garrysmod/player/.modules/v1.0/shared_prefabs/"
+    ],
+    "definevariable": {
+        "modelFilePath0": "previewmodel",
+        "modelFilePath1": "previewmodel",
+        "modelFilePath2": "previewmodel",
+        "modelFilePath3": "previewmodel",
+        "modelFilePath4": "previewmodel"
+    },
+    "model": {
+        "previewmodel": {
+            "qc": "thirdperson-1.qci",
+            "definevariable" : {
+                "EntType": "player"
+            },
+            "compile": true
+        }
+    }
+}
