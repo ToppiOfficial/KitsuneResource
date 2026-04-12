@@ -1,14 +1,13 @@
-import shlex
-import re
+import shlex, re
 from simpleeval import simple_eval
 from pathlib import Path
 from typing import Optional
 from utils import PrefixedLogger
 
 
-# ---------------------------------------------------------------------------
+#
 # Condition evaluation
-# ---------------------------------------------------------------------------
+#
 
 def _get_value(val_str: str, variables: dict, allow_literal: bool = False):
     val_str = val_str.strip()
@@ -63,17 +62,17 @@ def _eval_and_term(term: str, variables: dict) -> bool:
     return val is not None and str(val).strip() not in ("0", "", "false")
 
 
-# ---------------------------------------------------------------------------
+#
 # Exceptions
-# ---------------------------------------------------------------------------
+#
 
 class QCReturnException(Exception):
     pass
 
 
-# ---------------------------------------------------------------------------
+#
 # Processor
-# ---------------------------------------------------------------------------
+#
 
 ORANGE = "\033[38;5;208m"
 RED    = "\033[91m"
@@ -464,9 +463,9 @@ class QCProcessor:
         return "".join(self.output_lines)
 
 
-# ---------------------------------------------------------------------------
+#
 # Top-level flatten
-# ---------------------------------------------------------------------------
+#
 
 def flatten_qc(
     qc_path: Path,
@@ -555,9 +554,9 @@ def _parse_definemacro(stripped: str, parts: list, line_num: int, output_lines: 
     pass  # parsing is handled inline; hook kept for future use
 
 
-# ---------------------------------------------------------------------------
+#
 # Read helpers
-# ---------------------------------------------------------------------------
+#
 
 def qc_read_includes(qc_path: Path) -> list[Path]:
     if not qc_path.exists():

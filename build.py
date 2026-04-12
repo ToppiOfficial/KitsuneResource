@@ -8,7 +8,6 @@ ONE_FILE = True
 import subprocess
 import sys
 import os
-from pathlib import Path
 
 def detect_environment():
     in_venv = hasattr(sys, 'real_prefix') or (

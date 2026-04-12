@@ -1,17 +1,9 @@
-import subprocess
+import subprocess, shutil, re
 from pathlib import Path
-import shutil
-import re
 from utils import Logger
 
-def model_compile_studiomdl(
-    studiomdl_exe: str | Path,
-    qc_file: str | Path,
-    output_dir: str | Path = None,
-    game_dir: str | Path = None,
-    verbose: bool = False,
-    logger: Logger = None,
-) -> tuple[bool, list[Path], list[str]]:
+def model_compile_studiomdl(studiomdl_exe: str | Path, qc_file: str | Path, output_dir: str | Path = None, game_dir: str | Path = None,
+                            verbose: bool = False, logger: Logger = None) -> tuple[bool, list[Path], list[str]]:
     """
     Compile a Source model using studiomdl.exe and return compiled files and materials.
 
@@ -74,6 +66,7 @@ def model_compile_studiomdl(
         log.error(f"Unexpected exception compiling {qc_file.name}: {e}")
         return False, [], []
 
+
 def _log_compiler_output_to_console(output: str, log: Logger, verbose: bool, is_stderr: bool = False):
     """Log compiler output to CONSOLE ONLY, always showing warnings, errors, and important messages."""
     if not output:
@@ -104,6 +97,7 @@ def _log_compiler_output_to_console(output: str, log: Logger, verbose: bool, is_
             log.warn_console(line_stripped)
         elif line_stripped.startswith("$"):
             log.info_console(f"{ORANGE}{line_stripped}{RESET}")
+
 
 def _move_compiled_files(stdout: str, output_dir: Path | None, log: Logger) -> list[Path]:
     """Extract and move compiled model files to output directory."""
@@ -147,6 +141,7 @@ def _move_compiled_files(stdout: str, output_dir: Path | None, log: Logger) -> l
     _cleanup_empty_dirs(cleaned_dirs, log)
     return moved_files
 
+
 def _cleanup_empty_dirs(dirs: set[Path], log: Logger):
     """Remove empty directories after moving files."""
     for folder in sorted(dirs, key=lambda p: len(p.parts), reverse=True):
@@ -157,6 +152,7 @@ def _cleanup_empty_dirs(dirs: set[Path], log: Logger):
                 folder = folder.parent
         except Exception:
             pass
+
 
 def _extract_materials(stdout: str, log: Logger) -> list[str]:
     """Extract material paths from compiler output."""

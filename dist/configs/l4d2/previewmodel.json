@@ -12,15 +12,15 @@
         "D:/Development/game-mods/left4dead2/survivors/.modules/v3.0/shared_prefabs/animationlist_animlight/"
     ],
     "model": {
-        "PreviewModel": {
-            "qc": "_preview.qc",
+        "previewmodel": {
+            "qc": "thirdperson.qci",
             "definevariable" : {
-                "survivorName": {"value": "bill"},
+                "survivorName": {"value": "louis"},
                 "modelArmsFilePath": {"value": "weapons/arms/sample_arms.mdl", "targets": ["arms"]}
             },
             "compile": true,
             "submodels" : {
-                "arms" : "_release_arms.qc"
+                "arms" : "firstperson.qci"
             }
         }
     }

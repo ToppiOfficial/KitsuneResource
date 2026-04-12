@@ -1,12 +1,10 @@
-# utils.py
 import json, time, re, sys
 from pathlib import Path
 from datetime import datetime
 from functools import wraps
 from typing import List, Optional
 
-SOFTVERSION = 2.36
-DEFAULT_COMPILE_ROOT  = 'compiled_files'
+SOFTVERSION = 2.4
 
 SUPPORTED_TEXT_FORMAT = (
     '.txt', '.lua', '.nut', '.cfg', '.json', '.xml', '.yaml', '.yml',

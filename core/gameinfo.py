@@ -32,9 +32,18 @@ def get_game_search_paths(gameinfo_file: str | Path) -> list[Path]:
     for entry in game_entries:
         if "|gameinfo_path|" in entry:
             paths.append(base_dir)
+        elif "|all_source_engine_paths|" in entry:
+            entry = entry.replace("|all_source_engine_paths|", "")
+            if entry.endswith(".vpk"):
+                entry = str(Path(entry).parent)
+            candidate = (base_dir / entry).resolve()
+            if candidate.exists():
+                paths.append(candidate)
         elif entry.startswith("|") or "addon" in entry.lower():
             continue
         else:
+            if entry.endswith(".vpk"):
+                entry = str(Path(entry).parent)
             candidate = (base_dir / entry).resolve()
             if candidate.exists():
                 paths.append(candidate)

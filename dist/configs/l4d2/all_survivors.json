@@ -16,7 +16,7 @@
     ],
     "model": {
         "Bill": {
-            "qc": "_release.qc",
+            "qc": "thirdperson.qci",
             "compile": true,
             "definevariable": {
                 "survivorName": {"value": "bill"},
@@ -25,8 +25,8 @@
                 "modelDeathPoseFilePath": {"value": "survivors/NamVet/namvet_deathpose.mdl", "targets": ["deathpose"]}
             },
             "submodels": {
-                "arms": "_release_arms.qc",
-                "deathpose": "_release.qc"
+                "arms": "firstperson.qci",
+                "deathpose": "thirdperson.qci"
             },
             "subdata": [
                 {
@@ -67,7 +67,7 @@
             ]
         },
         "Francis": {
-            "qc": "_release.qc",
+            "qc": "thirdperson.qci",
             "compile": true,
             "definevariable": {
                 "survivorName": {"value": "francis"},
@@ -76,8 +76,8 @@
                 "modelArmsFilePath": {"value": "weapons/arms/v_arms_francis.mdl", "targets": ["arms"]}
             },
             "submodels": {
-                "arms": "_release_arms.qc",
-                "light": "_release.qc"
+                "arms": "firstperson.qci",
+                "light": "thirdperson.qci"
             },
             "subdata": [
                 {
@@ -118,7 +118,7 @@
             ]
         },
         "Louis": {
-            "qc": "_release.qc",
+            "qc": "thirdperson.qci",
             "compile": true,
             "definevariable": {
                 "survivorName": {"value": "louis"},
@@ -126,7 +126,7 @@
                 "modelArmsFilePath": {"value": "weapons/arms/v_arms_louis.mdl", "targets": ["arms"]}
             },
             "submodels": {
-                "arms": "_release_arms.qc"
+                "arms": "firstperson.qci"
             },
             "subdata": [
                 {
@@ -167,7 +167,7 @@
             ]
         },
         "Zoey": {
-            "qc": "_release.qc",
+            "qc": "thirdperson.qci",
             "compile": true,
             "definevariable": {
                 "survivorName": {"value": "zoey"},
@@ -176,8 +176,8 @@
                 "modelArmsFilePath": {"value": "weapons/arms/v_arms_zoey.mdl", "targets": ["arms"]}
             },
             "submodels": {
-                "arms": "_release_arms.qc",
-                "light": "_release.qc"
+                "arms": "firstperson.qci",
+                "light": "thirdperson.qci"
             },
             "subdata": [
                 {
@@ -218,7 +218,7 @@
             ]
         },
         "Coach": {
-            "qc": "_release.qc",
+            "qc": "thirdperson.qci",
             "compile": true,
             "definevariable": {
                 "survivorName": {"value": "coach"},
@@ -226,7 +226,7 @@
                 "modelArmsFilePath": {"value": "weapons/arms/v_arms_coach_new.mdl", "targets": ["arms"]}
             },
             "submodels": {
-                "arms": "_release_arms.qc"
+                "arms": "firstperson.qci"
             },
             "subdata": [
                 {
@@ -267,7 +267,7 @@
             ]
         },
         "Ellis": {
-            "qc": "_release.qc",
+            "qc": "thirdperson.qci",
             "compile": true,
             "definevariable": {
                 "survivorName": {"value": "ellis"},
@@ -275,7 +275,7 @@
                 "modelArmsFilePath": {"value": "weapons/arms/v_arms_mechanic_new.mdl", "targets": ["arms"]}
             },
             "submodels": {
-                "arms": "_release_arms.qc"
+                "arms": "firstperson.qci"
             },
             "subdata": [
                 {
@@ -316,7 +316,7 @@
             ]
         },
         "Nick": {
-            "qc": "_release.qc",
+            "qc": "thirdperson.qci",
             "compile": true,
             "definevariable": {
                 "survivorName": {"value": "nick"},
@@ -324,7 +324,7 @@
                 "modelArmsFilePath": {"value": "weapons/arms/v_arms_gambler_new.mdl", "targets": ["arms"]}
             },
             "submodels": {
-                "arms": "_release_arms.qc"
+                "arms": "firstperson.qci"
             },
             "subdata": [
                 {
@@ -365,7 +365,7 @@
             ]
         },
         "Rochelle": {
-            "qc": "_release.qc",
+            "qc": "thirdperson.qci",
             "compile": true,
             "definevariable": {
                 "survivorName": {"value": "rochelle"},
@@ -373,7 +373,7 @@
                 "modelArmsFilePath": {"value": "weapons/arms/v_arms_producer_new.mdl", "targets": ["arms"]}
             },
             "submodels": {
-                "arms": "_release_arms.qc"
+                "arms": "firstperson.qci"
             },
             "subdata": [
                 {

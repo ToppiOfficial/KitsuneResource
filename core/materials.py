@@ -1,11 +1,9 @@
 from pathlib import Path
-import re
-import shutil
-import subprocess
-from typing import Dict, List, Optional, Set, Tuple
-from utils import (
-    Logger, TEXTURE_KEYS
-)
+import re, shutil, subprocess
+from typing import Dict, List, Optional, Tuple
+
+from core.vpk import GameVPKCache
+from utils import Logger, TEXTURE_KEYS
 
 def find_material_vmt(material_name: str, search_paths: List[Path]) -> Optional[Path]:
     relative_vmt = Path("materials") / Path(material_name + ".vmt")
@@ -15,9 +13,9 @@ def find_material_vmt(material_name: str, search_paths: List[Path]) -> Optional[
             return candidate
     return None
 
-def map_materials_to_vmt(
-    materials_list: List[str], search_paths: List[Path], logger: Optional[Logger] = None
-) -> Dict[str, Path]:
+
+def map_materials_to_vmt(materials_list: List[str], search_paths: List[Path], logger: Optional[Logger] = None) -> Dict[str, Path]:
+    
     result = {}
     for mat in materials_list:
         vmt = find_material_vmt(mat, search_paths)
@@ -26,6 +24,7 @@ def map_materials_to_vmt(
         elif logger:
             logger.warn(f"Material not found: {mat}")
     return result
+
 
 def parse_vmt_structure(vmt_path: Path, logger: Optional[Logger] = None) -> dict:
     if not vmt_path.exists():
@@ -100,6 +99,7 @@ def parse_vmt_structure(vmt_path: Path, logger: Optional[Logger] = None) -> dict
         "textures": regular_textures
     }
 
+
 def parse_vmt_textures(vmt_path: Path, logger: Optional[Logger] = None) -> Dict[str, Path]:
     structure = parse_vmt_structure(vmt_path, logger)
     if structure["is_patch"]:
@@ -111,11 +111,12 @@ def parse_vmt_textures(vmt_path: Path, logger: Optional[Logger] = None) -> Dict[
 
 
 class MaterialCopyContext:
-    def __init__(self, export_dir: Path, search_paths: List[Path], localize_data: bool, logger: Optional[Logger]):
+    def __init__(self, export_dir: Path, search_paths: List[Path], localize_data: bool, logger: Optional[Logger], vpk_cache: Optional[GameVPKCache] = None):
         self.export_dir = export_dir
         self.search_paths = search_paths
         self.localize_data = localize_data
         self.logger = logger
+        self.vpk_cache = vpk_cache
         
         self.copied_files: List[Path] = []
         self.processed_vmts: Dict[Path, Path] = {}
@@ -225,7 +226,11 @@ class VMTProcessor:
         for key, tex_rel in textures.items():
             tex_file = self.ctx.find_texture(tex_rel)
             if not tex_file:
-                self.ctx.logger and self.ctx.logger.warn(f'Texture file not found for "{key}" -> {tex_rel}')
+                vpk_path = f"materials/{Path(tex_rel).as_posix()}.vtf" if not str(tex_rel).endswith('.vtf') else f"materials/{Path(tex_rel).as_posix()}"
+                if self.ctx.vpk_cache and self.ctx.vpk_cache.contains(vpk_path):
+                    self.ctx.logger and self.ctx.logger.debug(f'Texture is game-resident (VPK): "{key}" -> {tex_rel}')
+                else:
+                    self.ctx.logger and self.ctx.logger.warn(f'Texture file not found for "{key}" -> {tex_rel}')
                 continue
             
             dest_tex = self.ctx.localize_vtf(tex_file, dest_vmt, nosubfolder)
@@ -327,13 +332,15 @@ def copy_materials(
     export_dir: Path,
     search_paths: List[Path],
     localize_data: bool = True,
-    logger: Optional[Logger] = None
+    logger: Optional[Logger] = None,
+    vpk_cache: Optional[GameVPKCache] = None
 ) -> List[Path]:
+    
     if not material_to_vmt:
         logger and logger.warn("No materials to copy.")
         return []
     
-    ctx = MaterialCopyContext(export_dir, search_paths, localize_data, logger)
+    ctx = MaterialCopyContext(export_dir, search_paths, localize_data, logger, vpk_cache=vpk_cache)
     processor = VMTProcessor(ctx)
     
     for vmt_path in material_to_vmt.values():

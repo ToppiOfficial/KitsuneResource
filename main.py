@@ -1,6 +1,10 @@
-import sys
-import os
+import sys, os
 from pathlib import Path
+
+from core.vpk import GameVPKCache
+from core.materials import (
+    export_vtf, copy_materials, map_materials_to_vmt
+)
 
 if not getattr(sys, 'frozen', False):
     def check_and_activate_venv():
@@ -39,8 +43,7 @@ import send2trash
 
 from utils import (
     Logger, PrefixedLogger, PathResolver, timer, print_header, parse_config_json,
-    resolve_json_path, DEFAULT_COMPILE_ROOT, SUPPORTED_TEXT_FORMAT,
-    SUPPORTED_IMAGE_FORMAT
+    resolve_json_path, SUPPORTED_TEXT_FORMAT, SUPPORTED_IMAGE_FORMAT
 )
 
 from core.materials import (
@@ -232,6 +235,7 @@ class ModelCompiler:
         self.gameinfo_dir = gameinfo_dir
         self.args = args
         self.logger = logger
+        self._vpk_cache = GameVPKCache(gameinfo_dir, search_paths) if gameinfo_dir else None
         self.global_includedirs = global_includedirs if global_includedirs is not None else []
     
     def _parse_model_defines(self, model_define_vars: dict) -> tuple[dict, dict]:
@@ -309,10 +313,12 @@ class ModelCompiler:
             model_logger.info(f"Compiling model {qc_path.name}")
         
         global_vars = global_vars or {}
+        global_regular, _ = self._parse_model_defines(global_vars)
+
         model_define_vars = model_data.get("definevariable", {})
         regular_model_defines, targeted_model_defines = self._parse_model_defines(model_define_vars)
         
-        main_model_defines = self._get_qc_defines("qc", regular_model_defines, targeted_model_defines, global_vars)
+        main_model_defines = self._get_qc_defines("qc", regular_model_defines, targeted_model_defines, global_regular)
         
         include_dirs = self.global_includedirs.copy()
         
@@ -336,7 +342,7 @@ class ModelCompiler:
         self._compile_submodels(
             model_data, qc_path, output_dir, dumped_materials, model_logger, 
             game_dir=game_dir, 
-            global_vars=global_vars, 
+            global_vars=global_regular, 
             regular_model_vars=regular_model_defines, 
             targeted_model_vars=targeted_model_defines, 
             model_name=model_name,
@@ -429,6 +435,7 @@ class ModelCompiler:
             self.search_paths,
             localize_data=localize,
             logger=mat_logger,
+            vpk_cache=self._vpk_cache,
         )
         mat_logger.info(f"Material copy complete ({len(copied_files)} files).")
     
@@ -504,7 +511,7 @@ class ValveModelPipeline:
         else:
             self.logger.warn("No gameinfo provided. Shared materials and material collection will be limited.")
 
-        compile_root = Path(self.args.exportdir or DEFAULT_COMPILE_ROOT).resolve()
+        compile_root = Path(self.args.exportdir).resolve()
 
         if self.args.exportdir is None:
             self.logger.warn(f"--exportdir not provided, using default: {compile_root}")
@@ -712,31 +719,28 @@ def main():
     print_header()
 
     parser = argparse.ArgumentParser(description="Source Resource Compiler")
-    
-    # Positional argument
-    parser.add_argument("config_path", metavar="CONFIG_JSON",
-                        help="Path to the config.json file.")
 
-    # Global arguments
+    parser.add_argument("config_paths", metavar="CONFIG_JSON", nargs="+",
+                        help="One or more paths to config.json files.")
+
     parser.add_argument("--log", action="store_true",
                         help="Enable logging to the './kitsune_log' directory.")
-    parser.add_argument("--verbose", action="store_true", 
+    parser.add_argument("--verbose", action="store_true",
                         help="Enable verbose logging.")
 
-    # ValveModel Pipeline arguments
     model_group = parser.add_argument_group("ValveModel Pipeline")
-    model_group.add_argument("--exportdir", metavar="COMPILE_DIR", 
-                         default=DEFAULT_COMPILE_ROOT,
-                         help=f"Root folder for compiled output.")
+    model_group.add_argument("--exportdir", metavar="COMPILE_DIR",
+                         default=None,
+                         help="Root folder for compiled output. Defaults to each config's filename as folder name.")
     model_group.add_argument("--game", nargs='?', const=True, default=False,
                          help="Compile models directly to game directory. Optionally provide a path to a directory with gameinfo.txt to override config.")
     model_group.add_argument("--mat-mode", type=int, default=2, choices=[0,1,2],
                          help="Material mode: 0=skip, 1=raw-local, 2=shared (default).")
     model_group.add_argument("--no-mat-local", action="store_true",
                          help="Disable material localization.")
-    model_group.add_argument("--package-files", action="store_true", 
+    model_group.add_argument("--package-files", action="store_true",
                          help="Package each subfolder into VPK or GMA archive.")
-    model_group.add_argument("--archive-old-ver", action="store_true", 
+    model_group.add_argument("--archive-old-ver", action="store_true",
                          help="Archive existing files instead of deletion (formerly --archive).")
     model_group.add_argument("--qc-mode", type=int, default=2, choices=[1,2],
                          help="QC mode: 1=use raw QC, 2=use flattened QC (default).")
@@ -745,7 +749,6 @@ def main():
     model_group.add_argument("--single-addon", action="store_true",
                          help="Compile all output into a single addon folder defined by 'addonroot' in config.")
 
-    # ValveTexture Pipeline arguments
     texture_group = parser.add_argument_group("ValveTexture Pipeline")
     texture_group.add_argument("--forceupdate", action="store_true",
                          help="Force reprocessing all textures.")
@@ -753,11 +756,10 @@ def main():
                          help="Allow same file to be processed multiple times.")
     texture_group.add_argument("--recursive", action="store_true",
                          help="Search for files recursively in subfolders.")
-    
+
     def normalize_args(argv):
         normalized = []
         for arg in argv:
-            # Convert single-dash long args (e.g. -log, -verbose) to double-dash
             if arg.startswith('-') and not arg.startswith('--') and len(arg) > 2:
                 normalized.append('-' + arg)
             else:
@@ -766,92 +768,106 @@ def main():
 
     args = parser.parse_args(normalize_args(sys.argv[1:]))
 
-    # Setup logger
     log_file = None
     if args.log:
         log_dir = Path("kitsune_log").resolve()
         log_dir.mkdir(parents=True, exist_ok=True)
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         log_file = log_dir / f"kitsune_log_{timestamp}.txt"
-    
+
     logger = Logger(verbose=args.verbose, use_color=True, log_file=log_file)
     if log_file:
         logger.info(f"Logging enabled -> {log_file}")
-        logger.info(f"")
+        logger.info("")
 
-    # Find config file, searching in 'configs' folder if necessary
-    config_path_str = args.config_path
+    args.basedir = os.getcwd()
 
-    if not config_path_str or not config_path_str.strip():
-        logger.error("Config file path argument is empty. Please provide a valid path.")
-        return logger
+    def resolve_config_path(config_path_str: str) -> Optional[str]:
+        """Searches for config file, checking configs/ subfolder as fallback. Returns resolved path or None."""
+        if not config_path_str or not config_path_str.strip():
+            logger.error("Config file path argument is empty. Please provide a valid path.")
+            return None
 
-    config_path = Path(config_path_str)
+        config_path = Path(config_path_str)
+        if config_path.exists() and config_path.is_file():
+            return str(config_path)
 
-    if not (config_path.exists() and config_path.is_file()):
-        if getattr(sys, 'frozen', False):
-            # The app is frozen (e.g., packaged with PyInstaller)
-            base_dir = Path(sys.executable).parent
-        else:
-            # The app is running from a script
-            base_dir = Path(__file__).parent
-        
+        base_dir = Path(sys.executable).parent if getattr(sys, 'frozen', False) else Path(__file__).parent
         configs_dir = base_dir / "configs"
         config_filename = config_path.name
 
         if not config_filename:
             logger.warn(f"Could not determine a filename from '{config_path_str}'.")
+            return None
+
+        logger.info(f"Config file not found at '{config_path_str}'. Searching in '{configs_dir}'...")
+
+        if not configs_dir.is_dir():
+            logger.warn(f"The 'configs' directory does not exist at '{configs_dir}'.")
+            return None
+
+        candidate = configs_dir / config_path
+        found_files = [candidate] if candidate.is_file() else [f for f in configs_dir.rglob(config_filename) if f.is_file()]
+
+        if not found_files:
+            logger.warn(f"Could not find '{config_path_str}' in subfolders of '{configs_dir}'.")
+            return None
+
+        if len(found_files) > 1:
+            logger.warn(f"Found multiple '{config_filename}' files. Using the first one:")
+            for f in found_files:
+                logger.warn(f"  - {f}")
+
+        resolved = str(found_files[0])
+        logger.info(f"Found config file: {resolved}")
+        return resolved
+
+    for config_path_str in args.config_paths:
+        resolved_path = resolve_config_path(config_path_str)
+        if not resolved_path:
+            logger.info("")
+            continue
+
+        args.config_path = resolved_path
+
+        try:
+            config = parse_config_json(args.config_path)
+        except (FileNotFoundError, ValueError) as e:
+            logger.error(str(e))
+            logger.info("")
+            continue
+
+        header = config.get("header")
+        if not header:
+            logger.error(f"[{Path(resolved_path).name}] Missing 'header' field in config — cannot determine pipeline type.")
+            logger.info("")
+            continue
+
+        # Per-config export dir: use --exportdir if provided, otherwise use the config filename stem
+        if args.exportdir is not None:
+            args._exportdir_resolved = args.exportdir
         else:
-            logger.info(f"Config file not found at '{config_path_str}'. Searching in '{configs_dir}'...")
+            args._exportdir_resolved = Path(resolved_path).stem
+            if len(args.config_paths) > 1:
+                logger.info(f"[{Path(resolved_path).name}] No --exportdir set, using '{args._exportdir_resolved}' as output folder.")
 
-            if configs_dir.is_dir():
-                # Prefer exact relative path match first (e.g. configs/l4d2/previewmodel.json)
-                candidate = configs_dir / config_path
-                if candidate.is_file():
-                    found_files = [candidate]
-                else:
-                    found_files = [f for f in configs_dir.rglob(config_filename) if f.is_file()]
+        # Temporarily assign so pipeline reads the right exportdir
+        _original_exportdir = args.exportdir
+        args.exportdir = args._exportdir_resolved
 
-                if found_files:
-                    if len(found_files) > 1:
-                        logger.warn(f"Found multiple '{config_filename}' files. Using the first one:")
-                        for f in found_files:
-                            logger.warn(f"  - {f}")
-
-                    args.config_path = str(found_files[0])
-                    logger.info(f"Found config file: {args.config_path}")
-                else:
-                    logger.warn(f"Could not find '{config_path_str}' in subfolders of '{configs_dir}'.")
+        try:
+            if header == "ValveModel":
+                ValveModelPipeline(config, args, logger).execute()
+            elif header == "ValveTexture":
+                ValveTexturePipeline(config, args, logger).execute()
             else:
-                logger.warn(f"The 'configs' directory does not exist at '{configs_dir}'.")
+                logger.error(f"Unknown pipeline header: {header}")
+        except Exception as e:
+            logger.error(f"Pipeline execution failed for '{Path(resolved_path).name}': {e}")
+        finally:
+            args.exportdir = _original_exportdir
 
         logger.info("")
-
-    # Process config and execute pipeline
-    try:
-        config = parse_config_json(args.config_path)
-    except (FileNotFoundError, ValueError) as e:
-        logger.error(str(e))
-        return logger
-
-    header = config.get("header")
-    if not header:
-        logger.error("Missing 'header' field in config — cannot determine pipeline type.")
-        return logger
-
-    args.basedir = os.getcwd()
-
-    try:
-        if header == "ValveModel":
-            ValveModelPipeline(config, args, logger).execute()
-        elif header == 'ValveTexture':
-            ValveTexturePipeline(config, args, logger).execute()
-        else:
-            logger.error(f"Unknown pipeline header: {header}")
-            return logger
-    except Exception as e:
-        logger.error(f"Pipeline execution failed: {e}")
-        return logger
 
     return logger
 
