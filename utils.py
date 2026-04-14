@@ -4,7 +4,7 @@ from datetime import datetime
 from functools import wraps
 from typing import List, Optional
 
-SOFTVERSION = 2.4
+SOFTVERSION = 2.5
 
 SUPPORTED_TEXT_FORMAT = (
     '.txt', '.lua', '.nut', '.cfg', '.json', '.xml', '.yaml', '.yml',
@@ -291,8 +291,12 @@ def parse_config_json(config_path: str, seen_paths=None, filter_keys=None) -> di
     if not config_path.exists():
         raise FileNotFoundError(f"Config file not found: {config_path}")
 
-    with config_path.open("r", encoding="utf-8") as f:
-        config = json.load(f, object_pairs_hook=first_key_hook)
+    try:
+        with config_path.open("r", encoding="utf-8-sig") as f:
+            config = json.load(f, object_pairs_hook=first_key_hook)
+    except UnicodeDecodeError:
+        with config_path.open("r", encoding="latin-1") as f:
+            config = json.load(f, object_pairs_hook=first_key_hook)
 
     includes = config.get("include")
     if includes:

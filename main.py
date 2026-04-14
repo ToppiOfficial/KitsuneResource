@@ -863,7 +863,9 @@ def main():
             else:
                 logger.error(f"Unknown pipeline header: {header}")
         except Exception as e:
+            import traceback
             logger.error(f"Pipeline execution failed for '{Path(resolved_path).name}': {e}")
+            traceback.print_exc()
         finally:
             args.exportdir = _original_exportdir
 

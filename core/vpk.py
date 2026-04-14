@@ -14,7 +14,7 @@ class GameVPKCache:
         for search_path in self._search_paths:
             for vpk_path in search_path.glob("*_dir.vpk"):
                 try:
-                    self._pak_files.append(vpklib.open(str(vpk_path)))
+                    self._pak_files.append(vpklib.open(str(vpk_path), path_enc='latin-1'))
                 except Exception:
                     pass
 

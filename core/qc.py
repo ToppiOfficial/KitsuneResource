@@ -3,6 +3,7 @@ from simpleeval import simple_eval
 from pathlib import Path
 from typing import Optional
 from utils import PrefixedLogger
+from core import vrd as vrd_module
 
 
 #
@@ -90,6 +91,7 @@ class QCProcessor:
         macro_args_override: dict = None,
         include_dirs: list = None,
         root_dir: Path = None,
+        current_scale: float = 1.0
     ):
         self.variables          = variables if variables is not None else {}
         self.macros             = macros    if macros    is not None else {}
@@ -102,6 +104,7 @@ class QCProcessor:
         self.json_vars          = set(self.variables)
         self.defined_vars       = set(self.variables)
         self.pushd_stack        = []
+        self.current_scale      = current_scale
 
     # ------------------------------------------------------------------
     # Logging helpers
@@ -176,6 +179,12 @@ class QCProcessor:
 
         active_parts   = self._parse_command(processed.strip())
         active_command = active_parts[0].lower() if active_parts else ""
+
+        if active_command == "$scale" and len(active_parts) >= 2:
+            try:
+                self.current_scale = float(active_parts[1])
+            except ValueError:
+                pass
 
         if active_command == "$include":
             return self._handle_include(line, active_parts, line_num, base_dir, include_stack, processed.strip())
@@ -259,10 +268,14 @@ class QCProcessor:
             self._warn(f"WARNING Line {line_num}: Undefined variable in $iffileexist path")
 
         file_path = Path(raw.strip().strip('"'))
+        
+        is_qc_file = file_path.suffix.lower() in (".qc", ".qci")
 
-        if self.pushd_stack:
+        # Only use pushd if it's NOT a qc/qci file
+        if self.pushd_stack and not is_qc_file:
             return (self.pushd_stack[-1] / file_path).resolve().exists()
 
+        # Standard resolution logic for qc/qci (or if pushd is empty)
         resolve_base = self.root_dir or base_dir
         target = (resolve_base / file_path).resolve() if resolve_base else file_path.resolve()
 
@@ -415,6 +428,8 @@ class QCProcessor:
                 include_dirs=self.include_dirs,
                 _root_dir=self.root_dir,
                 _pushd_stack=self.pushd_stack,
+                _vrd_name_counts=self.vrd_name_counts,
+                _current_scale=self.current_scale
             )
             return header + nested + "\n"
         except Exception as e:
@@ -444,6 +459,7 @@ class QCProcessor:
             macro_args_override=arg_mapping,
             include_dirs=self.include_dirs,
             root_dir=self.root_dir,
+            current_scale=self.current_scale
         )
         processor.defined_vars = self.defined_vars.copy()
         processor.pushd_stack  = list(self.pushd_stack)
@@ -477,7 +493,10 @@ def flatten_qc(
     include_dirs: list = None,
     _root_dir: Path = None,
     _pushd_stack: list = None,
+    _vrd_name_counts: dict = None,
+    _current_scale: float = 1.0
 ) -> str:
+
     _include_stack = _include_stack or set()
     _variables     = _variables     or {}
     _macros        = _macros        or {}
@@ -497,52 +516,94 @@ def flatten_qc(
     _include_stack.add(resolved)
     _root_dir = _root_dir or resolved.parent
 
-    processor = QCProcessor(_variables, _macros, logger, include_dirs=include_dirs or [], root_dir=_root_dir)
-    processor.defined_vars = _defined_vars
-    processor.pushd_stack  = _pushd_stack
+    processor = QCProcessor(_variables, _macros, logger, include_dirs=include_dirs or [], root_dir=_root_dir, current_scale=_current_scale)
+    processor.defined_vars    = _defined_vars
+    processor.pushd_stack     = _pushd_stack
+    processor.vrd_name_counts = _vrd_name_counts if _vrd_name_counts is not None else {}
 
     output_lines  = []
     current_macro = None
     macro_lines   = []
 
     with resolved.open("r", encoding="utf-8", errors="ignore") as f:
-        for line_num, line in enumerate(f, 1):
-            stripped = line.strip()
-            parts    = processor._parse_command(stripped)
-            command  = parts[0].lower() if parts else ""
+        all_lines = f.readlines()
 
-            if current_macro is not None:
-                body_line = line.rstrip()
-                if body_line.endswith("\\\\"):
-                    macro_lines.append(body_line[:-2].rstrip())
-                else:
-                    macro_lines.append(body_line)
-                    _macros[current_macro['name']] = {'args': current_macro['args'], 'body': macro_lines}
-                    current_macro = None
-                    macro_lines   = []
+    i = 0
+    new_bonemerge = set()
+
+    while i < len(all_lines):
+        line     = all_lines[i]
+        line_num = i + 1
+        stripped = line.strip()
+        parts    = processor._parse_command(stripped)
+        command  = parts[0].lower() if parts else ""
+        i += 1
+
+        if current_macro is not None:
+            body_line = line.rstrip()
+            if body_line.endswith("\\\\"):
+                macro_lines.append(body_line[:-2].rstrip())
+            else:
+                macro_lines.append(body_line)
+                _macros[current_macro['name']] = {'args': current_macro['args'], 'body': macro_lines}
+                current_macro = None
+                macro_lines   = []
+            continue
+
+        is_skipping = bool(processor.if_stack) and not processor.if_stack[-1][0]
+
+        if processor._handle_conditional(command, parts, line_num, is_skipping, resolved.parent):
+            continue
+        if is_skipping:
+            continue
+
+        if command in ("$nekodriverbone", "$driverbone"):
+            if len(parts) < 2:
+                output_lines.append(f"// WARNING Line {line_num}: {command} missing driver bone name\n")
                 continue
+            driver_bone = parts[1].strip('"')
+            block, i = vrd_module._parse_driverbone_block(all_lines, i)
+            if block and block["pose"] and block["target_bones"]:
+                vrd_name = re.sub(r'[^\w]', '_', driver_bone)
+                count = processor.vrd_name_counts.get(vrd_name, 0)
+                processor.vrd_name_counts[vrd_name] = count + 1
+                if count > 0:
+                    vrd_name = f"{vrd_name}_{count}"
+                try:
+                    pose_base = processor.pushd_stack[-1] if processor.pushd_stack else _root_dir
+                    vrd_module.generate_vrd(
+                        driver_bone, block["pose"], block["triggers"],
+                        block["target_bones"], pose_base, _root_dir, vrd_name, processor.current_scale
+                    )
+                    
+                    for target_bone in block["target_bones"]:
+                        if target_bone in new_bonemerge:
+                            continue
+                        output_lines.append(f'$bonemerge "{target_bone}"\n')
+                        new_bonemerge.add((target_bone))
+                    
+                    output_lines.append(f'// VRD Scale: {processor.current_scale}"\n')
+                    output_lines.append(f'$proceduralbones "vrds/{vrd_name}.vrd"\n')
+                except Exception as e:
+                    output_lines.append(f"// ERROR Line {line_num}: Failed to generate VRD for '{driver_bone}': {e}\n")
+            else:
+                output_lines.append(f"// WARNING Line {line_num}: {command} block incomplete, skipped\n")
+            continue
 
-            is_skipping = bool(processor.if_stack) and not processor.if_stack[-1][0]
+        if command == "$definemacro":
+            _parse_definemacro(stripped, parts, line_num, output_lines)
+            no_cont = stripped[:-2].strip() if stripped.endswith("\\\\") else stripped
+            macro_parts = processor._parse_command(no_cont)
+            if len(macro_parts) >= 2:
+                current_macro = {'name': macro_parts[1], 'args': macro_parts[2:]}
+                macro_lines   = []
+            else:
+                output_lines.append(f"// WARNING Line {line_num}: Malformed $definemacro: {stripped}\n")
+            continue
 
-            if processor._handle_conditional(command, parts, line_num, is_skipping, resolved.parent):
-                continue
-            if is_skipping:
-                continue
-
-            if command == "$definemacro":
-                _parse_definemacro(stripped, parts, line_num, output_lines)
-                no_cont = stripped[:-2].strip() if stripped.endswith("\\\\") else stripped
-                macro_parts = processor._parse_command(no_cont)
-                if len(macro_parts) >= 2:
-                    current_macro = {'name': macro_parts[1], 'args': macro_parts[2:]}
-                    macro_lines   = []
-                else:
-                    output_lines.append(f"// WARNING Line {line_num}: Malformed $definemacro: {stripped}\n")
-                continue
-
-            result = processor.process_line(line, line_num, resolved.parent, _include_stack)
-            if result is not None:
-                output_lines.append(result)
+        result = processor.process_line(line, line_num, resolved.parent, _include_stack)
+        if result is not None:
+            output_lines.append(result)
 
     output_lines.extend(processor.output_lines)
     _include_stack.remove(resolved)

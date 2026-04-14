@@ -15,13 +15,9 @@
         "previewmodel": {
             "qc": "thirdperson.qci",
             "definevariable" : {
-                "survivorName": {"value": "louis"},
-                "modelArmsFilePath": {"value": "weapons/arms/sample_arms.mdl", "targets": ["arms"]}
+                "survivorName": {"value": "zoey"}
             },
-            "compile": true,
-            "submodels" : {
-                "arms" : "firstperson.qci"
-            }
+            "compile": true
         }
     }
 }
