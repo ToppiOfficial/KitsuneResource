@@ -15,7 +15,7 @@
         "previewmodel": {
             "qc": "thirdperson.qci",
             "definevariable" : {
-                "survivorName": {"value": "zoey"}
+                "survivorName": {"value": "bill"}
             },
             "compile": true
         }

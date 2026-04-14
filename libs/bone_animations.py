@@ -207,7 +207,7 @@ def read_dmx_bone_animation(filepath: str, target_bone: str | None = None) -> Bo
     if isinstance(duration, int):
         duration = datamodel.Time.from_int(duration)
 
-    total_frames = max(1, int(float(duration) * frame_rate) + 1)
+    total_frames = max(1, round(float(duration) * frame_rate) + 1)
 
     parent_map: dict[str, str | None] = {}           # bone_name -> parent_name
     transform_id_map: dict[any, str] = {}             # DmeTransform.id -> bone_name
@@ -259,7 +259,7 @@ def read_dmx_bone_animation(filepath: str, target_bone: str | None = None) -> Bo
             t = times[idx]
             if isinstance(t, int):
                 t = datamodel.Time.from_int(t)
-            frame_index = int((float(t) + float(start)) * frame_rate)
+            frame_index = int(round(float(t) * frame_rate))
             bone_channels[bone_name][attr][frame_index] = values[idx]
 
     frames: BoneFrameData = [[] for _ in range(total_frames)]
