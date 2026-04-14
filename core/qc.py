@@ -564,7 +564,7 @@ def flatten_qc(
             driver_bone = parts[1].strip('"')
             block, i = vrd_module._parse_driverbone_block(all_lines, i)
             if block and block["pose"] and block["target_bones"]:
-                vrd_name = re.sub(r'[^\w]', '_', driver_bone)
+                vrd_name = re.sub(r'[^\w]', '_', f"{resolved.stem}_{driver_bone}")
                 count = processor.vrd_name_counts.get(vrd_name, 0)
                 processor.vrd_name_counts[vrd_name] = count + 1
                 if count > 0:
