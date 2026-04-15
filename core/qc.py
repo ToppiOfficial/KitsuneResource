@@ -389,8 +389,6 @@ class QCProcessor:
                 d = (resolve_base / d).resolve()
             candidate = (d / filename).resolve()
             if candidate.exists():
-                if self.logger:
-                    self.logger.info(f"Found include via includedirs: {candidate}")
                 return candidate, True
 
         return target, False
@@ -406,6 +404,14 @@ class QCProcessor:
             include_file = parts[1]
 
         target, from_dirs = self._resolve_include(include_file, base_dir)
+
+        if self.logger:
+            if from_dirs:
+                self.logger.info(f"(includedirs): {target.name}")
+                self.logger.debug(f"(includedirs) full path: {target}")
+            else:
+                self.logger.info(f"(local): {target.name}")
+                self.logger.debug(f"(local) full path: {target}")
 
         if not target.exists():
             msg = f"Include file not found at line {line_num}: {include_file}"
@@ -564,7 +570,8 @@ def flatten_qc(
             driver_bone = parts[1].strip('"')
             block, i = vrd_module._parse_driverbone_block(all_lines, i)
             if block and block["pose"] and block["target_bones"]:
-                vrd_name = re.sub(r'[^\w]', '_', f"{resolved.stem}_{driver_bone}")
+                pose_stem = Path(block["pose"]).stem.lower()
+                vrd_name = re.sub(r'[^\w]', '_', f"{pose_stem}_{driver_bone.lower()}")
                 count = processor.vrd_name_counts.get(vrd_name, 0)
                 processor.vrd_name_counts[vrd_name] = count + 1
                 if count > 0:
@@ -573,7 +580,8 @@ def flatten_qc(
                     pose_base = processor.pushd_stack[-1] if processor.pushd_stack else _root_dir
                     vrd_module.generate_vrd(
                         driver_bone, block["pose"], block["triggers"],
-                        block["target_bones"], pose_base, _root_dir, vrd_name, processor.current_scale
+                        block["target_bones"], pose_base, _root_dir, vrd_name, processor.current_scale,
+                        logger=logger
                     )
                     
                     for target_bone in block["target_bones"]:

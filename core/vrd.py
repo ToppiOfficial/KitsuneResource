@@ -57,7 +57,7 @@ def _parse_driverbone_block(lines: list[str], start: int) -> tuple[dict | None, 
 
 def generate_vrd(driver_bone: str, pose_path: str, triggers: list[tuple[float, int]],
                  target_bones: list[str], pose_dir: Path, vrd_dir: Path, vrd_name: str,
-                 scale: float = 1.0) -> Path:
+                 scale: float = 1.0, logger=None) -> Path:
 
     pose_file = (pose_dir / pose_path).resolve()
 
@@ -70,29 +70,31 @@ def generate_vrd(driver_bone: str, pose_path: str, triggers: list[tuple[float, i
                 ext = candidate_ext
                 break
 
-    if ext == ".dmx":
-        all_frames = bone_animations.read_dmx_bone_animation(str(pose_file))
-    elif ext == ".smd":
-        all_frames = bone_animations.read_smd_bone_animation(str(pose_file))
+    if ext == ".smd":
+        euler_frames = bone_animations.frames_rotation_to_degrees(
+            bone_animations.read_smd_bone_animation(str(pose_file))
+        )
+    elif ext == ".dmx":
+        euler_frames = bone_animations.frames_rotation_to_degrees(
+            bone_animations.frames_quat_to_euler(
+                bone_animations.read_dmx_bone_animation(str(pose_file))
+            )
+        )
     else:
         raise ValueError(f"Unsupported format: {ext}")
 
-    euler_frames = bone_animations.frames_rotation_to_degrees(
-        bone_animations.frames_quat_to_euler(all_frames)
-    )
     if scale != 1.0:
         euler_frames = bone_animations.apply_world_scale(euler_frames, scale)
 
-    # Use first frame to build a case-insensitive hierarchy
-    # Bone names in DMX are often 'ValveBiped.Bip01_L_Hand' (note capital H)
     hierarchy = {bt.bone_name.lower(): bt for bt in euler_frames[0]}
-    
-    # ISOLATE DRIVER: Find the driver bone requested by the QC
     d_key = driver_bone.lower()
     driver_ref = hierarchy.get(d_key)
 
     if not driver_ref:
-        print(f"CRITICAL: Driver {driver_bone} not found in {pose_path}!")
+        if logger: logger.error(f"Driver '{driver_bone}' not found in {pose_path}")
+
+    def strip_prefix(bone_name):
+        return bone_name.split('.')[-1]
 
     vrd_lines = []
 
@@ -101,16 +103,13 @@ def generate_vrd(driver_bone: str, pose_path: str, triggers: list[tuple[float, i
         helper_ref = hierarchy.get(h_key)
 
         if not helper_ref:
-            print(f"WARNING: Helper {helper_bone} not found. Skipping.")
+            if logger: logger.warning(f"Helper '{helper_bone}' not found, skipping")
             continue
 
         # hp: Helper Parent | dp: Driver Parent
         # We MUST pull dp from the driver_ref to ensure it matches the side
         hp = helper_ref.parent_name if helper_ref.parent_name else helper_bone
         dp = (driver_ref.parent_name if driver_ref else None) or driver_bone
-
-        def strip_prefix(bone_name):
-            return bone_name.split('.')[-1]
 
         vrd_lines.append(
             f"<helper> {strip_prefix(helper_bone)} {strip_prefix(hp)} "
@@ -122,9 +121,7 @@ def generate_vrd(driver_bone: str, pose_path: str, triggers: list[tuple[float, i
             if frame_index >= len(euler_frames):
                 frame_index = len(euler_frames) - 1
 
-            # Get map for this specific frame
             frame_map = {bt.bone_name.lower(): bt for bt in euler_frames[frame_index]}
-
             d_bt = frame_map.get(d_key)
             h_bt = frame_map.get(h_key)
 
@@ -139,9 +136,10 @@ def generate_vrd(driver_bone: str, pose_path: str, triggers: list[tuple[float, i
 
         vrd_lines.append("")
 
-    # Save logic
     out_dir = vrd_dir / "vrds"
     out_dir.mkdir(exist_ok=True)
     vrd_path = out_dir / f"{vrd_name}.vrd"
     vrd_path.write_text("\n".join(vrd_lines), encoding="utf-8")
+
+    if logger: logger.info(f"(VRD generated): {vrd_path.name}")
     return vrd_path
