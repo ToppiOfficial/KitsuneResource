@@ -198,6 +198,50 @@ def read_smd_bone_animation(filepath: str, target_bone: str | None = None) -> Bo
 def read_dmx_bone_animation(filepath: str, target_bone: str | None = None) -> BoneFrameData:
     dm = datamodel.load(filepath)
 
+    if not dm.root.get("animationList"):
+        parent_map: dict[str, str | None] = {}
+        base_transforms: dict[str, tuple] = {}
+
+        def _walk_joints(joint, parent_name):
+            for child in joint.get("children", []):
+                if child.type in ("DmeJoint", "DmeDag") or "Joint" in child.type:
+                    parent_map[child.name] = parent_name
+                    trfm = child.get("transform")
+                    if trfm is not None:
+                        pos = trfm.get("position", (0.0, 0.0, 0.0))
+                        ori = trfm.get("orientation", (0.0, 0.0, 0.0, 1.0))
+                        base_transforms[child.name] = (
+                            (pos[0], pos[1], pos[2]),
+                            (ori[0], ori[1], ori[2], ori[3]),
+                        )
+                    _walk_joints(child, child.name)
+
+        DmeModel = dm.root.get("model") or dm.root.get("skeleton")
+        if not DmeModel:
+            return []
+
+        # Check for baseStates first, fall back to live transforms
+        base_states = DmeModel.get("baseStates")
+        if base_states and len(base_states) > 0:
+            for trfm in base_states[0].get("transforms", []):
+                base_transforms[trfm.name] = (
+                    tuple(trfm.get("position", (0.0, 0.0, 0.0)))[:3],
+                    tuple(trfm.get("orientation", (0.0, 0.0, 0.0, 1.0)))[:4],
+                )
+        else:
+            for root_joint in DmeModel.get("children", []):
+                parent_map[root_joint.name] = None
+                _walk_joints(root_joint, root_joint.name)
+
+        frame: list[BoneTransform] = []
+        for bone_name, (pos, ori) in base_transforms.items():
+            if target_bone is not None and bone_name != target_bone:
+                continue
+            parent_name = parent_map.get(bone_name)
+            frame.append(BoneTransform(bone_name, parent_name, pos, ori))
+
+        return [frame]
+
     animation = dm.root["animationList"]["animations"][0]
     frame_rate = animation.get("frameRate", 30)
     time_frame = animation["timeFrame"]

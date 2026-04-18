@@ -4,7 +4,9 @@ from pathlib import Path
 from typing import Optional
 from utils import PrefixedLogger
 from core import vrd as vrd_module
-
+from libs import flex_controllers
+from libs.bone_animations import read_dmx_bone_animation, frames_quat_to_euler, frames_rotation_to_degrees, read_smd_bone_animation, apply_world_scale
+                
 
 #
 # Condition evaluation
@@ -61,6 +63,7 @@ def _eval_and_term(term: str, variables: dict) -> bool:
         return _compare(m.group(1), m.group(2), m.group(3), variables)
     val = _get_value(term, variables)
     return val is not None and str(val).strip() not in ("0", "", "false")
+
 
 
 #
@@ -392,6 +395,16 @@ class QCProcessor:
                 return candidate, True
 
         return target, False
+    
+    def _resolve_dmx_path(self, raw_path: str, base_dir: Path) -> Optional[Path]:
+        p = Path(raw_path)
+        candidates = [self.pushd_stack[-1] / p if self.pushd_stack else None,
+                    (self.root_dir / p) if self.root_dir else None,
+                    base_dir / p]
+        for c in candidates:
+            if c and c.exists():
+                return c
+        return None
 
     def _handle_include(self, original_line: str, parts: list, line_num: int,
                         base_dir: Path, include_stack: set, processed_line: str) -> str:
@@ -563,6 +576,17 @@ def flatten_qc(
         if is_skipping:
             continue
 
+        # Substitute variables once here so all command handlers below work on resolved text
+        line, has_sub_error = processor._substitute_variables(line, line_num)
+        if has_sub_error:
+            output_lines.append(f"// ERROR Line {line_num}: Undefined variable in line: {all_lines[i - 1].rstrip()}\n")
+            output_lines.append(line)
+            continue
+
+        stripped = line.strip()
+        parts    = processor._parse_command(stripped)
+        command  = parts[0].lower() if parts else ""
+
         if command in ("$nekodriverbone", "$driverbone"):
             if len(parts) < 2:
                 output_lines.append(f"// WARNING Line {line_num}: {command} missing driver bone name\n")
@@ -583,13 +607,11 @@ def flatten_qc(
                         block["target_bones"], pose_base, _root_dir, vrd_name, processor.current_scale,
                         logger=logger
                     )
-                    
                     for target_bone in block["target_bones"]:
                         if target_bone in new_bonemerge:
                             continue
                         output_lines.append(f'$bonemerge "{target_bone}"\n')
-                        new_bonemerge.add((target_bone))
-                    
+                        new_bonemerge.add(target_bone)
                     output_lines.append(f'// VRD Scale: {processor.current_scale}"\n')
                     output_lines.append(f'$proceduralbones "vrds/{vrd_name}.vrd"\n')
                 except Exception as e:
@@ -607,6 +629,121 @@ def flatten_qc(
                 macro_lines   = []
             else:
                 output_lines.append(f"// WARNING Line {line_num}: Malformed $definemacro: {stripped}\n")
+            continue
+
+        if command == "$model":
+            block_lines = [line]
+            if "{" in line:
+                depth = line.count("{") - line.count("}")
+                while depth > 0 and i < len(all_lines):
+                    next_line, _ = processor._substitute_variables(all_lines[i], line_num + len(block_lines))
+                    block_lines.append(next_line)
+                    depth += next_line.count("{") - next_line.count("}")
+                    i += 1
+
+            block_content = "".join(block_lines)
+            sub_parts = processor._parse_command(line.strip())
+
+            if len(sub_parts) >= 3 and sub_parts[2].lower().endswith(".dmx"):
+                dmx_raw  = sub_parts[2].strip('"')
+                dmx_path = processor._resolve_dmx_path(dmx_raw, resolved.parent)
+                if dmx_path:
+                    res_content, errs, count = flex_controllers.inject_flex_controllers_from_dmx(block_content, dmx_path)
+                    for err in errs:
+                        output_lines.append(f"// ERROR Line {line_num}: {err}\n")
+                    if count > 0 and logger:
+                        logger.info(f"Constructed {count} flex controllers from {dmx_path.name}")
+                    output_lines.append(res_content)
+                else:
+                    output_lines.append(f"// WARNING Line {line_num}: Could not resolve DMX '{dmx_raw}'\n")
+                    output_lines.append(block_content)
+            else:
+                output_lines.append(block_content)
+            continue
+
+        if command == "$defineskeleton":
+            if len(parts) < 3:
+                output_lines.append(f"// WARNING Line {line_num}: $defineskeleton requires a DMX path and frame index\n")
+                continue
+
+            dmx_raw = parts[1].strip('"')
+            try:
+                frame_idx = int(parts[2])
+            except ValueError:
+                output_lines.append(f"// WARNING Line {line_num}: $defineskeleton frame index must be an integer\n")
+                continue
+
+            target_bones = []
+            
+            rest_of_line = stripped[len(parts[0]):].strip()
+            rest_of_line = rest_of_line[len(parts[1]):].strip()
+            rest_of_line = rest_of_line[len(parts[2]):].strip()
+
+            if "{" in rest_of_line:
+                content = rest_of_line[rest_of_line.find("{")+1:].strip()
+                
+                while i < len(all_lines):
+                    if "}" in content:
+                        closing_idx = content.find("}")
+                        final_tokens = content[:closing_idx].strip()
+                        if final_tokens:
+                            for token in processor._parse_command(final_tokens):
+                                target_bones.append(token.strip('"'))
+                        break
+                    
+                    if content:
+                        for token in processor._parse_command(content):
+                            target_bones.append(token.strip('"'))
+                    
+                    content = all_lines[i].strip()
+                    i += 1
+
+            dmx_path = processor._resolve_dmx_path(dmx_raw, resolved.parent)
+            if not dmx_path:
+                output_lines.append(f"// WARNING Line {line_num}: could not resolve DMX '{dmx_raw}'\n")
+                continue
+
+            try:
+                ext = dmx_path.suffix.lower()
+                if ext == ".dmx":
+                    frames = read_dmx_bone_animation(str(dmx_path))
+                    frames = frames_quat_to_euler(frames)
+                elif ext == ".smd":
+                    frames = read_smd_bone_animation(str(dmx_path))
+                else:
+                    continue
+
+                frames = frames_rotation_to_degrees(frames)
+
+                if processor.current_scale != 1.0:
+                    frames = apply_world_scale(frames, processor.current_scale)
+
+                if frame_idx < len(frames):
+                    frame = frames[frame_idx]
+                    bone_map = {bt.bone_name: bt for bt in frame}
+
+                    if not target_bones:
+                        bones_to_write = list(bone_map.keys())
+                    else:
+                        bones_to_write = target_bones
+
+                    for bone_name in bones_to_write:
+                        bt = bone_map.get(bone_name)
+                        if bt:
+                            x, y, z = bt.location
+                            rx, ry, rz = bt.rotation
+                            parent = f'"{bt.parent_name}"' if bt.parent_name else '""'
+                            output_lines.append(
+                                f'$definebone "{bone_name}" {parent} '
+                                f'{x:.6f} {y:.6f} {z:.6f} '
+                                f'{rx:.6f} {ry:.6f} {rz:.6f} '
+                                f'0 0 0 0 0 0\n'
+                            )
+                        else:
+                            output_lines.append(f"// WARNING: bone '{bone_name}' not found\n")
+            except Exception as e:
+                output_lines.append(f"// ERROR: {e}\n")
+            
             continue
 
         result = processor.process_line(line, line_num, resolved.parent, _include_stack)
