@@ -4,7 +4,7 @@ from datetime import datetime
 from functools import wraps
 from typing import List, Optional
 
-SOFTVERSION = 2.52
+SOFTVERSION = 2.6
 
 SUPPORTED_TEXT_FORMAT = (
     '.txt', '.lua', '.nut', '.cfg', '.json', '.xml', '.yaml', '.yml',
@@ -27,27 +27,55 @@ TEXTURE_KEYS = {
 }
 
 class Logger:
-    """
-    Simple logger with levels, optional color output, and optional file logging.
-    """
     LEVELS = {"INFO": 1, "WARN": 2, "ERROR": 3, "DEBUG": 4}
 
     COLOR = {
-        "INFO": "\033[97m",    # bright white
-        "WARN": "\033[33m",    # orange/dark yellow
-        "ERROR": "\033[91m",   # red
-        "DEBUG": "\033[35m",   # purple/dark magenta
+        "INFO": "\033[97m",
+        "WARN": "\033[33m",
+        "ERROR": "\033[91m",
+        "DEBUG": "\033[35m",
         "RESET": "\033[0m"
+    }
+    
+    CONTEXT_COLORS = {
+        "MODEL": ("\033[95m", "MDL"),
+        "MATERIAL": ("\033[96m", "MAT"),
+        "DATA": ("\033[93m", "DAT"),
+        "PACKAGER": ("\033[94m", "PACKAGER"),
+        "OS": ("\033[92m", "OS"),
     }
 
     _ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
 
-    def __init__(self, verbose=False, use_color=True, log_file=None):
-        self.verbose = verbose
-        self.use_color = use_color
-        self.log_file = log_file  # Path or None
-        self.warn_count = 0
-        self.error_count = 0
+    def __init__(self, verbose=False, use_color=True, log_file=None, context=None, parent=None):
+        if parent:
+            self.verbose = parent.verbose
+            self.use_color = parent.use_color
+            self.log_file = parent.log_file
+            self.root = parent.root if hasattr(parent, 'root') else parent
+        else:
+            self.verbose = verbose
+            self.use_color = use_color
+            self.log_file = log_file
+            self.warn_count = 0
+            self.error_count = 0
+            self.root = self
+
+        self.context = context.upper() if context else None
+        self.context_label = self.context
+        
+        if self.context:
+            color, label = self.CONTEXT_COLORS.get(self.context, (None, self.context))
+            self.context_label = label
+            if color and self.use_color:
+                self.prefix = f"{color}[{label}]{self.COLOR['RESET']}"
+            else:
+                self.prefix = f"[{label}]"
+        else:
+            self.prefix = ""
+
+    def with_context(self, context: str) -> "Logger":
+        return Logger(context=context, parent=self)
 
     def _write_to_file(self, text):
         if self.log_file:
@@ -55,67 +83,47 @@ class Logger:
                 with self.log_file.open("a", encoding="utf-8") as f:
                     f.write(text + "\n")
             except Exception:
-                # Fail silently on logging errors to avoid crashing main program
                 pass
 
     def _print(self, level, message, console_only=False):
         if level == "WARN":
-            self.warn_count += 1
+            self.root.warn_count += 1
         elif level == "ERROR":
-            self.error_count += 1
+            self.root.error_count += 1
 
         now = datetime.now()
 
-        # Console Logging
         if self.verbose or level != "DEBUG":
             timestamp_console = now.strftime("%H:%M:%S")
-            if level == "INFO":
-                console_line = f"{timestamp_console} | {message}"
-            else:
-                level_prefix_str = f"[{level}]"
+            level_prefix_str = f"[{level}]"
+            prefix_part = f"{self.prefix} " if self.prefix else ""
+
+            if self.use_color and level in self.COLOR:
+                level_color = self.COLOR[level]
+                colored_level_prefix = f"{level_color}{level_prefix_str}{self.COLOR['RESET']}"
                 
-                # Check for a context prefix like [MDL] by stripping color codes and using a regex
-                clean_message = self._ansi_escape.sub('', message)
-                match = re.match(r'^\[\w+\]\s', clean_message)
-
-                if self.use_color and level in self.COLOR:
-                    level_color = self.COLOR[level]
-                    colored_level_prefix = f"{level_color}{level_prefix_str}{self.COLOR['RESET']}"
-
-                    if match:
-                        # Context prefix found, format as: [CONTEXT] [LEVEL] MESSAGE
-                        parts = message.split(' ', 1)
-                        context_prefix = parts[0]
-                        msg_content = parts[1] if len(parts) > 1 else ''
-                        
-                        # Recolor the message part, ensuring not to mess up existing colors
-                        recolored_msg = msg_content.replace(self.COLOR['RESET'], level_color)
-                        
-                        console_line = f"{timestamp_console} | {context_prefix} {colored_level_prefix} {level_color}{recolored_msg}{self.COLOR['RESET']}"
-                    else:
-                        # No context prefix, format as: [LEVEL] MESSAGE
-                        colored_message = message.replace(self.COLOR['RESET'], level_color)
-                        console_line = f"{timestamp_console} | {colored_level_prefix} {level_color}{colored_message}{self.COLOR['RESET']}"
+                if level == "INFO":
+                    console_line = f"{timestamp_console} | {prefix_part}{message}"
                 else:
-                    # Same logic, but without color
-                    if match:
-                        parts = message.split(' ', 1)
-                        context_prefix = parts[0]
-                        msg_content = parts[1] if len(parts) > 1 else ''
-                        console_line = f"{timestamp_console} | {context_prefix} {level_prefix_str} {msg_content}"
-                    else:
-                        console_line = f"{timestamp_console} | {level_prefix_str} {message}"
+                    colored_message = message.replace(self.COLOR['RESET'], level_color)
+                    console_line = f"{timestamp_console} | {prefix_part}{colored_level_prefix} {level_color}{colored_message}{self.COLOR['RESET']}"
+            else:
+                if level == "INFO":
+                    console_line = f"{timestamp_console} | {prefix_part}{message}"
+                else:
+                    console_line = f"{timestamp_console} | {prefix_part}{level_prefix_str} {message}"
+            
             print(console_line)
 
-        # File Logging
         if self.log_file and not console_only:
             clean_message = self._ansi_escape.sub('', message)
             timestamp_file = now.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-            file_line = f"{timestamp_file}\t[{level.upper()}] {clean_message}"
+            context_str = f"[{self.context_label}] " if self.context_label else ""
+            file_line = f"{timestamp_file}\t[{level.upper()}] {context_str}{clean_message}"
             self._write_to_file(file_line)
 
-    def info(self, message):  self._print("INFO", message)
-    def warn(self, message):  self._print("WARN", message)
+    def info(self, message): self._print("INFO", message)
+    def warn(self, message): self._print("WARN", message)
     def error(self, message): self._print("ERROR", message)
     def debug(self, message): self._print("DEBUG", message)
 
@@ -123,8 +131,9 @@ class Logger:
         if self.log_file:
             clean_data = self._ansi_escape.sub('', data)
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-            header = f"--- BEGIN {source} OUTPUT"
-            footer = f"--- END {source} OUTPUT"
+            src = f"{self.context_label}/{source}" if self.context_label else source
+            header = f"--- BEGIN {src} OUTPUT"
+            footer = f"--- END {src} OUTPUT"
             full_log = f"{timestamp}\t{header}\n{clean_data}\n{timestamp}\t{footer}"
             self._write_to_file(full_log)
         
@@ -133,59 +142,8 @@ class Logger:
     def error_console(self, message): self._print("ERROR", message, console_only=True)
     def debug_console(self, message): self._print("DEBUG", message, console_only=True)
 
-        
-class PrefixedLogger:
-    """Logger wrapper to prepend a colored context prefix."""
-    
-    CONTEXT_INFO = {
-        "MODEL": ("\033[95m", "MDL"),
-        "MATERIAL": ("\033[96m", "MAT"),
-        "DATA": ("\033[93m", "DAT"),
-        "PACKAGER": ("\033[94m", "PACKAGER"),
-        "OS": ("\033[92m", "OS"),
-    }
-
-    def __init__(self, base_logger, context):
-        self.logger = base_logger
-        self.context = context.upper()
-        
-        color, label = self.CONTEXT_INFO.get(self.context, (None, self.context))
-
-        if color and self.logger.use_color:
-            self.prefix = f"{color}[{label}]{self.logger.COLOR['RESET']}"
-        else:
-            self.prefix = f"[{label}]"
-
-    def info(self, msg):
-        self.logger.info(f"{self.prefix} {msg}")
-
-    def warn(self, msg):
-        self.logger.warn(f"{self.prefix} {msg}")
-
-    def error(self, msg):
-        self.logger.error(f"{self.prefix} {msg}")
-
-    def debug(self, msg):
-        self.logger.debug(f"{self.prefix} {msg}")
-
-    def write_raw_to_log(self, data, source="Generic"):
-        self.logger.write_raw_to_log(data, source=f"{self.context}/{source}")
-        
-    def info_console(self, msg):
-        self.logger.info_console(f"{self.prefix} {msg}")
-
-    def warn_console(self, msg):
-        self.logger.warn_console(f"{self.prefix} {msg}")
-
-    def error_console(self, msg):
-        self.logger.error_console(f"{self.prefix} {msg}")
-
-    def debug_console(self, msg):
-        self.logger.debug_console(f"{self.prefix} {msg}")
 
 class PathResolver:
-    """Handles path resolution and validation"""
-    
     @staticmethod
     def resolve_and_validate(config: dict, *keys) -> List[Optional[Path]]:
         paths = []
@@ -213,7 +171,6 @@ def timer(func):
         start_time = time.time()
         logger = None
         try:
-            # main() now returns logger so wrapper can use it
             logger = func(*args, **kwargs)
         finally:
             elapsed = time.time() - start_time
@@ -229,29 +186,18 @@ def timer(func):
         return logger
     return wrapper
 
-def resolve_json_path(json_path, config_file, dir_override=None):
-    """Resolve a path from JSON relative to --dir if provided, otherwise relative to the JSON file folder."""
-    # Clean json_path (remove accidental leading slashes)
-    p = Path(json_path.lstrip("/\\"))
+def resolve_json_path(json_path: str, config_file: Path, dir_override: Optional[Path] = None) -> Path:
+    p = Path(str(json_path).strip("/\\"))
 
-    # Clean dir_override if present (strip quotes, spaces)
-    clean_dir = None
-    if dir_override:
-        clean_dir = str(dir_override).strip(' "\'')
-
-    # Resolve relative paths
     if not p.is_absolute():
-        if clean_dir:  # prefer --dir root
-            p = Path(clean_dir) / p
-        else:  # fallback to JSON folder
+        if dir_override:
+            p = Path(str(dir_override).strip(' "\'')) / p
+        else:
             p = Path(config_file).parent / p
 
     return p.resolve()
 
 def deep_merge(base: dict, override: dict) -> dict:
-    """
-    Recursively merge two dicts. override takes precedence over base.
-    """
     result = base.copy()
     for key, value in override.items():
         if key in result and isinstance(result[key], dict) and isinstance(value, dict):
@@ -261,16 +207,6 @@ def deep_merge(base: dict, override: dict) -> dict:
     return result
 
 def parse_config_json(config_path: str, seen_paths=None, filter_keys=None) -> dict:
-    """
-    Load a config.json for Source Resource Compiler with optional 'include' support.
-    Included JSONs are merged recursively. Current JSON values override included JSONs.
-    
-    Args:
-        config_path: Path to the main JSON file.
-        seen_paths: Internal set to detect circular includes (do not pass manually).
-        filter_keys: Optional list of keys to exclude from included JSONs.
-                     By default we exclude "include" itself to prevent infinite recursion.
-    """
     def first_key_hook(pairs):
         d = {}
         for key, value in pairs:
@@ -345,7 +281,6 @@ def print_header():
                                                                                                        
 """
 
-    # Center the extra lines based on the widest line in the ASCII art
     art_lines = ascii_art.splitlines()
     max_width = max(len(line) for line in art_lines)
 

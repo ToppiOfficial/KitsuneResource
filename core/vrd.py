@@ -1,8 +1,6 @@
 from pathlib import Path
-from libs import bone_animations
-
+from core import bone_animations
 import shlex
-
 
 def _parse_driverbone_block(lines: list[str], start: int) -> tuple[dict | None, int]:
     result = {"pose": None, "triggers": [], "target_bones": []}

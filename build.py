@@ -1,5 +1,3 @@
-from utils import SOFTVERSION
-
 MAIN_SCRIPT = "main.py"
 EXE_NAME = "kitsuneresource"
 ICON_PATH = "icon.png"

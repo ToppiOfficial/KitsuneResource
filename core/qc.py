@@ -2,11 +2,11 @@ import shlex, re
 from simpleeval import simple_eval
 from pathlib import Path
 from typing import Optional
-from utils import PrefixedLogger
+from utils import Logger
 from core import vrd as vrd_module
-from libs import flex_controllers
-from libs.bone_animations import read_dmx_bone_animation, frames_quat_to_euler, frames_rotation_to_degrees, read_smd_bone_animation, apply_world_scale
-                
+from core import flex_controllers
+from core.bone_animations import read_dmx_bone_animation, frames_quat_to_euler, frames_rotation_to_degrees, read_smd_bone_animation, apply_world_scale
+
 
 #
 # Condition evaluation
@@ -65,7 +65,6 @@ def _eval_and_term(term: str, variables: dict) -> bool:
     return val is not None and str(val).strip() not in ("0", "", "false")
 
 
-
 #
 # Exceptions
 #
@@ -98,7 +97,7 @@ class QCProcessor:
     ):
         self.variables          = variables if variables is not None else {}
         self.macros             = macros    if macros    is not None else {}
-        self.logger: PrefixedLogger = logger
+        self.logger: Logger     = logger
         self.macro_args_override = macro_args_override or {}
         self.include_dirs       = include_dirs or []
         self.root_dir           = root_dir
@@ -109,10 +108,6 @@ class QCProcessor:
         self.pushd_stack        = []
         self.current_scale      = current_scale
 
-    # ------------------------------------------------------------------
-    # Logging helpers
-    # ------------------------------------------------------------------
-
     def _log(self, level: str, color: str, msg: str):
         if self.logger:
             getattr(self.logger, level)(f"{color}{msg}{RESET}")
@@ -120,10 +115,6 @@ class QCProcessor:
     def _warn(self, msg: str): self._log("error",  ORANGE, msg)
     def _err(self,  msg: str): self._log("error",  RED,    msg)
     def _info(self, msg: str): self._log("info",   ORANGE, msg)
-
-    # ------------------------------------------------------------------
-    # Parsing / substitution
-    # ------------------------------------------------------------------
 
     def _parse_command(self, line: str) -> list:
         try:
@@ -150,10 +141,6 @@ class QCProcessor:
 
     def _effective_vars(self) -> dict:
         return {**self.variables, **self.macro_args_override}
-
-    # ------------------------------------------------------------------
-    # Main line processor
-    # ------------------------------------------------------------------
 
     def process_line(self, line: str, line_num: int, base_dir: Path, include_stack: set) -> Optional[str]:
         stripped      = line.strip()
@@ -200,13 +187,6 @@ class QCProcessor:
             return "// " + processed
 
         return processed
-
-    # ------------------------------------------------------------------
-    # Conditionals
-    # ------------------------------------------------------------------
-
-    # if_stack entries: (active: bool, branch_taken: bool, kind: str)
-    # kind is the opening command, e.g. "$if", "$ifdef", "$iffileexist"
 
     def _handle_conditional(self, command: str, parts: list, line_num: int, is_skipping: bool, base_dir: Path = None) -> bool:
         if command in ("$if", "$ifdef", "$iffileexist"):
@@ -274,11 +254,9 @@ class QCProcessor:
         
         is_qc_file = file_path.suffix.lower() in (".qc", ".qci")
 
-        # Only use pushd if it's NOT a qc/qci file
         if self.pushd_stack and not is_qc_file:
             return (self.pushd_stack[-1] / file_path).resolve().exists()
 
-        # Standard resolution logic for qc/qci (or if pushd is empty)
         resolve_base = self.root_dir or base_dir
         target = (resolve_base / file_path).resolve() if resolve_base else file_path.resolve()
 
@@ -318,10 +296,6 @@ class QCProcessor:
         parent_skip = len(self.if_stack) > 1 and not self.if_stack[-2][0]
         self.if_stack[-1] = (False, True, kind) if (parent_skip or taken) else (True, True, kind)
         return True
-
-    # ------------------------------------------------------------------
-    # Variable commands
-    # ------------------------------------------------------------------
 
     def _eval_value(self, value_str: str) -> str:
         try:
@@ -374,10 +348,6 @@ class QCProcessor:
             return None
         except Exception as e:
             return f"// WARNING Line {line_num}: Failed to parse $redefinevariable: {line} ({e})\n"
-
-    # ------------------------------------------------------------------
-    # Include
-    # ------------------------------------------------------------------
 
     def _resolve_include(self, include_file: str, base_dir: Path) -> tuple[Path, bool]:
         resolve_base = self.root_dir or base_dir
@@ -437,7 +407,7 @@ class QCProcessor:
         header = f"\n// NOTE: Original path '{include_file}' not found, using includedirs: {target}\n" if from_dirs else "\n"
 
         try:
-            nested = flatten_qc(
+            nested = process_qc_file(
                 target,
                 _include_stack=include_stack.copy(),
                 _variables=self.variables,
@@ -455,10 +425,6 @@ class QCProcessor:
             msg = f"ERROR Line {line_num}: Failed to process include '{include_file}': {e}"
             if self.logger: self.logger.error(msg)
             return f"// {msg}\n"
-
-    # ------------------------------------------------------------------
-    # Macro expansion
-    # ------------------------------------------------------------------
 
     def _handle_macro_expansion(self, active_command: str, parts: list,
                                  base_dir: Path, include_stack: set, line_num: int) -> str:
@@ -484,10 +450,6 @@ class QCProcessor:
         processor.pushd_stack  = list(self.pushd_stack)
         return processor.process_content('\n'.join(macro_def['body']) + '\n', base_dir, include_stack.copy())
 
-    # ------------------------------------------------------------------
-    # Batch processing
-    # ------------------------------------------------------------------
-
     def process_content(self, content: str, base_dir: Path, include_stack: set) -> str:
         self.output_lines = []
         self.if_stack     = []
@@ -498,11 +460,38 @@ class QCProcessor:
         return "".join(self.output_lines)
 
 
-#
-# Top-level flatten
-#
+def _format_qc_output(text: str) -> str:
+    lines = text.splitlines()
+    result = []
+    depth = 0
+    consecutive_newlines = 0
+    
+    for line in lines:
+        stripped = line.strip()
+        
+        if not stripped:
+            consecutive_newlines += 1
+            if consecutive_newlines <= 1:
+                result.append("")
+            continue
+            
+        consecutive_newlines = 0
+        
+        if depth == 0:
+            formatted_line = stripped
+        else:
+            formatted_line = line.rstrip()
+            
+        depth += line.count('{') - line.count('}')
+        if depth < 0:
+            depth = 0
+            
+        result.append(formatted_line)
+        
+    return "\n".join(result).strip() + "\n"
 
-def flatten_qc(
+
+def process_qc_file(
     qc_path: Path,
     _include_stack: set = None,
     _variables: dict = None,
@@ -576,7 +565,6 @@ def flatten_qc(
         if is_skipping:
             continue
 
-        # Substitute variables once here so all command handlers below work on resolved text
         line, has_sub_error = processor._substitute_variables(line, line_num)
         if has_sub_error:
             output_lines.append(f"// ERROR Line {line_num}: Undefined variable in line: {all_lines[i - 1].rstrip()}\n")
@@ -753,11 +741,11 @@ def flatten_qc(
     output_lines.extend(processor.output_lines)
     _include_stack.remove(resolved)
 
-    return re.sub(r'\n{2,}', '\n\n', "".join(output_lines))
+    return _format_qc_output("".join(output_lines))
 
 
 def _parse_definemacro(stripped: str, parts: list, line_num: int, output_lines: list):
-    pass  # parsing is handled inline; hook kept for future use
+    pass
 
 
 #

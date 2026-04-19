@@ -1,6 +1,5 @@
-import re
 from pathlib import Path
-from libs import datamodel
+from core import datamodel
 
 CATEGORY_ORDER = ["eyes", "eyelid", "brow", "mouth", "cheek", "misc"]
 

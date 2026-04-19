@@ -68,7 +68,6 @@ def model_compile_studiomdl(studiomdl_exe: str | Path, qc_file: str | Path, outp
 
 
 def _log_compiler_output_to_console(output: str, log: Logger, verbose: bool, is_stderr: bool = False):
-    """Log compiler output to CONSOLE ONLY, always showing warnings, errors, and important messages."""
     if not output:
         return
 
@@ -100,7 +99,6 @@ def _log_compiler_output_to_console(output: str, log: Logger, verbose: bool, is_
 
 
 def _move_compiled_files(stdout: str, output_dir: Path | None, log: Logger) -> list[Path]:
-    """Extract and move compiled model files to output directory."""
     mdl_matches = re.findall(r'writing\s+([^\n\r]+\.mdl)', stdout, flags=re.IGNORECASE)
     moved_files = []
     cleaned_dirs = set()
@@ -143,7 +141,6 @@ def _move_compiled_files(stdout: str, output_dir: Path | None, log: Logger) -> l
 
 
 def _cleanup_empty_dirs(dirs: set[Path], log: Logger):
-    """Remove empty directories after moving files."""
     for folder in sorted(dirs, key=lambda p: len(p.parts), reverse=True):
         try:
             while folder.exists() and not any(folder.iterdir()):

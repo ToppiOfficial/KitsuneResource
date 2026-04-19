@@ -1,15 +1,13 @@
-from libs import datamodel
+from core import datamodel
 import re
 from math import cos, sin, atan2, asin, degrees, radians
 from typing import NamedTuple
-
 
 class BoneTransform(NamedTuple):
     bone_name: str
     parent_name: str | None
     location: tuple[float, float, float]
     rotation: tuple  # (x, y, z, w) quaternion  or  (x, y, z) euler
-
 
 BoneFrameData = list[list[BoneTransform]]
 
