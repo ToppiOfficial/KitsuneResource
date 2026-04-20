@@ -48,11 +48,12 @@ _CMP_RE = re.compile(r'^\s*([^\s"]+|"[^"]+")\s*(==|!=|>=|<=|>|<)\s*([^\s"]+|"[^"
 
 def _evaluate_condition(expression: str, variables: dict, is_ifdef: bool) -> bool:
     expression = expression.strip()
-    if is_ifdef:
-        return expression in variables
-
     for or_part in expression.split('||'):
-        if all(_eval_and_term(t.strip(), variables) for t in or_part.split('&&') if t.strip()):
+        terms = [t.strip() for t in or_part.split('&&') if t.strip()]
+        if is_ifdef:
+            if all(t in variables for t in terms):
+                return True
+        elif all(_eval_and_term(t, variables) for t in terms):
             return True
     return False
 
@@ -376,6 +377,29 @@ class QCProcessor:
                 return c
         return None
 
+    def _collect_block(self, all_lines: list, i: int, depth: int, base_dir: Path) -> tuple[list[str], int]:
+        """Collect lines of a { } block until depth reaches 0.
+        Conditionals are evaluated and variable substitution is applied.
+        The closing '}' line is included in the returned lines."""
+        block_lines = []
+        while depth > 0 and i < len(all_lines):
+            raw_line = all_lines[i]
+            inner_parts = self._parse_command(raw_line.strip())
+            inner_cmd = inner_parts[0].lower() if inner_parts else ""
+            i += 1
+
+            is_skipping = bool(self.if_stack) and not self.if_stack[-1][0]
+            if self._handle_conditional(inner_cmd, inner_parts, i, is_skipping, base_dir):
+                continue
+            if is_skipping:
+                continue
+
+            substituted, _ = self._substitute_variables(raw_line, i)
+            depth += substituted.count("{") - substituted.count("}")
+            block_lines.append(substituted)
+
+        return block_lines, i
+
     def _handle_include(self, original_line: str, parts: list, line_num: int,
                         base_dir: Path, include_stack: set, processed_line: str) -> str:
         if len(parts) < 2:
@@ -537,7 +561,8 @@ def process_qc_file(
         all_lines = f.readlines()
 
     i = 0
-    new_bonemerge = set()
+    new_bonemerge          = set()
+    new_lookat_attachments = {}  # stripped_target -> list of (location, rotation, attachment_name)
 
     while i < len(all_lines):
         line     = all_lines[i]
@@ -608,6 +633,50 @@ def process_qc_file(
                 output_lines.append(f"// WARNING Line {line_num}: {command} block incomplete, skipped\n")
             continue
 
+        if command == "$driverlookatbone":
+            if len(parts) < 2:
+                output_lines.append(f"// WARNING Line {line_num}: $driverlookatbone missing bone name\n")
+                continue
+            target_bone = parts[1].strip('"')
+            block, i = vrd_module._parse_driverlookatbone_block(all_lines, i)
+            if block and block["pose"] and block["helper_bones"]:
+                pose_stem = Path(block["pose"]).stem.lower()
+                vrd_name = re.sub(r'[^\w]', '_', f"lookat_{pose_stem}_{target_bone.lower()}")
+                count = processor.vrd_name_counts.get(vrd_name, 0)
+                processor.vrd_name_counts[vrd_name] = count + 1
+                if count > 0:
+                    vrd_name = f"{vrd_name}_{count}"
+                try:
+                    pose_base = processor.pushd_stack[-1] if processor.pushd_stack else _root_dir
+                    stripped_target = target_bone.split('.')[-1]
+                    loc, rot = block["location"], block["rotation"]
+                    existing = new_lookat_attachments.get(stripped_target, [])
+                    attachment_name = next((n for l, r, n in existing if l == loc and r == rot), None)
+                    if attachment_name is None:
+                        base = f"{stripped_target}_lookattarget"
+                        attachment_name = base if not existing else f"{base}_{len(existing)}"
+                        existing.append((loc, rot, attachment_name))
+                        new_lookat_attachments[stripped_target] = existing
+                        pos_str = " ".join(f"{v:g}" for v in loc)
+                        rot_str = " ".join(f"{v:g}" for v in rot)
+                        output_lines.append(f'$attachment "{attachment_name}" "{target_bone}" {pos_str} rotate {rot_str}\n')
+                    vrd_module.generate_lookat_vrd(
+                        target_bone, attachment_name, block["frame"], block["aimvector"], block["upvector"],
+                        block["helper_bones"], block["pose"], pose_base, _root_dir, vrd_name,
+                        processor.current_scale, logger=logger
+                    )
+                    for helper_bone in block["helper_bones"]:
+                        if helper_bone not in new_bonemerge:
+                            output_lines.append(f'$bonemerge "{helper_bone}"\n')
+                            new_bonemerge.add(helper_bone)
+                    output_lines.append(f'// VRD Scale: {processor.current_scale}\n')
+                    output_lines.append(f'$proceduralbones "vrds/{vrd_name}.vrd"\n')
+                except Exception as e:
+                    output_lines.append(f"// ERROR Line {line_num}: Failed to generate lookat VRD for '{target_bone}': {e}\n")
+            else:
+                output_lines.append(f"// WARNING Line {line_num}: $driverlookatbone block incomplete, skipped\n")
+            continue
+
         if command == "$definemacro":
             _parse_definemacro(stripped, parts, line_num, output_lines)
             no_cont = stripped[:-2].strip() if stripped.endswith("\\\\") else stripped
@@ -622,12 +691,10 @@ def process_qc_file(
         if command == "$model":
             block_lines = [line]
             if "{" in line:
-                depth = line.count("{") - line.count("}")
-                while depth > 0 and i < len(all_lines):
-                    next_line, _ = processor._substitute_variables(all_lines[i], line_num + len(block_lines))
-                    block_lines.append(next_line)
-                    depth += next_line.count("{") - next_line.count("}")
-                    i += 1
+                inner_lines, i = processor._collect_block(
+                    all_lines, i, line.count("{") - line.count("}"), resolved.parent
+                )
+                block_lines.extend(inner_lines)
 
             block_content = "".join(block_lines)
             sub_parts = processor._parse_command(line.strip())
@@ -649,6 +716,75 @@ def process_qc_file(
                 output_lines.append(block_content)
             continue
 
+        if command in ("$defineskeletonhierarchy", "$defineskeletonheirarchy"):
+            if len(parts) < 2:
+                output_lines.append(f"// WARNING Line {line_num}: {command} requires a DMX path\n")
+                continue
+
+            dmx_raw = parts[1].strip('"')
+            target_bones = []
+
+            brace_line = stripped
+            if "{" not in brace_line and i < len(all_lines):
+                brace_line = all_lines[i].strip()
+                if "{" in brace_line:
+                    i += 1
+
+            if "{" in brace_line:
+                after_open = brace_line[brace_line.find("{") + 1:].strip()
+                depth = 1 + after_open.count("{") - after_open.count("}")
+                pre_close = after_open[:after_open.find("}")] if "}" in after_open else after_open
+                for token in processor._parse_command(pre_close):
+                    target_bones.append(token.strip('"'))
+
+                if depth > 0:
+                    inner_lines, i = processor._collect_block(all_lines, i, depth, resolved.parent)
+                    for bl in inner_lines:
+                        for token in processor._parse_command(bl.strip()):
+                            if token != "}":
+                                target_bones.append(token.strip('"'))
+
+            dmx_path = None
+            if Path(dmx_raw).suffix.lower() in (".dmx", ".smd"):
+                dmx_path = processor._resolve_dmx_path(dmx_raw, resolved.parent)
+            else:
+                dmx_path = processor._resolve_dmx_path(dmx_raw + ".dmx", resolved.parent)
+                if not dmx_path:
+                    dmx_path = processor._resolve_dmx_path(dmx_raw + ".smd", resolved.parent)
+                    
+            if not dmx_path:
+                output_lines.append(f"// WARNING Line {line_num}: could not resolve DMX '{dmx_raw}'\n")
+                continue
+
+            try:
+                ext = dmx_path.suffix.lower()
+                if ext == ".dmx":
+                    frames = read_dmx_bone_animation(str(dmx_path))
+                elif ext == ".smd":
+                    frames = read_smd_bone_animation(str(dmx_path))
+                else:
+                    continue
+
+                if frames:
+                    frame = frames[0]
+                    bone_map = {bt.bone_name: bt for bt in frame}
+
+                    bones_to_write = target_bones if target_bones else list(bone_map.keys())
+
+                    for bone_name in bones_to_write:
+                        bt = bone_map.get(bone_name)
+                        if bt:
+                            parent = f'"{bt.parent_name}"' if bt.parent_name else '""'
+                            output_lines.append(f'$hierarchy "{bone_name}" {parent}\n')
+                        else:
+                            output_lines.append(f"// WARNING: bone '{bone_name}' not found\n")
+                else:
+                    output_lines.append(f"// WARNING: no frames found in '{dmx_raw}'\n")
+            except Exception as e:
+                output_lines.append(f"// ERROR: {e}\n")
+            
+            continue
+
         if command == "$defineskeleton":
             if len(parts) < 3:
                 output_lines.append(f"// WARNING Line {line_num}: $defineskeleton requires a DMX path and frame index\n")
@@ -662,31 +798,36 @@ def process_qc_file(
                 continue
 
             target_bones = []
-            
-            rest_of_line = stripped[len(parts[0]):].strip()
-            rest_of_line = rest_of_line[len(parts[1]):].strip()
-            rest_of_line = rest_of_line[len(parts[2]):].strip()
 
-            if "{" in rest_of_line:
-                content = rest_of_line[rest_of_line.find("{")+1:].strip()
-                
-                while i < len(all_lines):
-                    if "}" in content:
-                        closing_idx = content.find("}")
-                        final_tokens = content[:closing_idx].strip()
-                        if final_tokens:
-                            for token in processor._parse_command(final_tokens):
-                                target_bones.append(token.strip('"'))
-                        break
-                    
-                    if content:
-                        for token in processor._parse_command(content):
-                            target_bones.append(token.strip('"'))
-                    
-                    content = all_lines[i].strip()
+            # Find opening brace — may be on the same line or the next
+            brace_line = stripped
+            if "{" not in brace_line and i < len(all_lines):
+                brace_line = all_lines[i].strip()
+                if "{" in brace_line:
                     i += 1
 
-            dmx_path = processor._resolve_dmx_path(dmx_raw, resolved.parent)
+            if "{" in brace_line:
+                after_open = brace_line[brace_line.find("{") + 1:].strip()
+                depth = 1 + after_open.count("{") - after_open.count("}")
+                pre_close = after_open[:after_open.find("}")] if "}" in after_open else after_open
+                for token in processor._parse_command(pre_close):
+                    target_bones.append(token.strip('"'))
+
+                if depth > 0:
+                    inner_lines, i = processor._collect_block(all_lines, i, depth, resolved.parent)
+                    for bl in inner_lines:
+                        for token in processor._parse_command(bl.strip()):
+                            if token != "}":
+                                target_bones.append(token.strip('"'))
+
+            dmx_path = None
+            if Path(dmx_raw).suffix.lower() in (".dmx", ".smd"):
+                dmx_path = processor._resolve_dmx_path(dmx_raw, resolved.parent)
+            else:
+                dmx_path = processor._resolve_dmx_path(dmx_raw + ".dmx", resolved.parent)
+                if not dmx_path:
+                    dmx_path = processor._resolve_dmx_path(dmx_raw + ".smd", resolved.parent)
+                    
             if not dmx_path:
                 output_lines.append(f"// WARNING Line {line_num}: could not resolve DMX '{dmx_raw}'\n")
                 continue
@@ -732,6 +873,79 @@ def process_qc_file(
             except Exception as e:
                 output_lines.append(f"// ERROR: {e}\n")
             
+            continue
+
+        if command == "$rendermeshlist":
+            replace_rules = []
+            mesh_names = []
+            ignore_missing = False
+
+            brace_line = stripped
+            if "{" not in brace_line and i < len(all_lines):
+                brace_line = all_lines[i].strip()
+                if "{" in brace_line:
+                    i += 1
+
+            if "{" not in brace_line:
+                output_lines.append(f"// WARNING Line {line_num}: $rendermeshlist missing opening brace\n")
+                continue
+
+            after_open = brace_line[brace_line.find("{") + 1:].strip()
+            depth = 1 + after_open.count("{") - after_open.count("}")
+
+            def parse_rendermesh_tokens(tokens):
+                if not tokens:
+                    return
+                keyword = tokens[0].lower()
+                if keyword == "replace" and len(tokens) >= 2:
+                    pattern = tokens[1]
+                    replacement = tokens[2] if len(tokens) >= 3 else ""
+                    replace_rules.append((pattern, replacement))
+                elif keyword == "ignore_missing" and len(tokens) >= 2:
+                    nonlocal ignore_missing
+                    ignore_missing = tokens[1].strip() not in ("0", "false")
+                else:
+                    for token in tokens:
+                        if token != "}":
+                            mesh_names.append(token.strip('"'))
+
+            if after_open:
+                pre_close = after_open[:after_open.find("}")] if "}" in after_open else after_open
+                parse_rendermesh_tokens(processor._parse_command(pre_close))
+
+            if depth > 0:
+                inner_lines, i = processor._collect_block(all_lines, i, depth, resolved.parent)
+                for bl in inner_lines:
+                    parse_rendermesh_tokens(processor._parse_command(bl.strip()))
+
+            for mesh_name in mesh_names:
+                body_name = mesh_name
+                for pattern, replacement in replace_rules:
+                    body_name = re.sub(pattern, replacement, body_name)
+
+                raw_path = mesh_name
+                if Path(raw_path).suffix.lower() in (".dmx", ".smd"):
+                    file_str = raw_path
+                    dmx_path = processor._resolve_dmx_path(raw_path, resolved.parent)
+                else:
+                    dmx_path = processor._resolve_dmx_path(raw_path + ".dmx", resolved.parent)
+                    if dmx_path:
+                        file_str = raw_path + ".dmx"
+                    else:
+                        dmx_path = processor._resolve_dmx_path(raw_path + ".smd", resolved.parent)
+                        file_str = raw_path + ".smd" if dmx_path else raw_path + ".dmx"
+
+                if not dmx_path:
+                    if ignore_missing:
+                        output_lines.append(f"// WARNING: '{mesh_name}' not found\n")
+                        output_lines.append(f'// $body "{body_name}" "{file_str}"\n')
+                    else:
+                        output_lines.append(f"// WARNING Line {line_num}: $rendermeshlist could not resolve '{mesh_name}'\n")
+                        output_lines.append(f'$body "{body_name}" "{file_str}"\n')
+                    continue
+
+                output_lines.append(f'$body "{body_name}" "{file_str}"\n')
+
             continue
 
         result = processor.process_line(line, line_num, resolved.parent, _include_stack)

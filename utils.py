@@ -4,7 +4,7 @@ from datetime import datetime
 from functools import wraps
 from typing import List, Optional
 
-SOFTVERSION = 2.6
+SOFTVERSION = 2.8
 
 SUPPORTED_TEXT_FORMAT = (
     '.txt', '.lua', '.nut', '.cfg', '.json', '.xml', '.yaml', '.yml',
