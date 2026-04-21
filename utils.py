@@ -4,8 +4,8 @@ from datetime import datetime
 from functools import wraps
 from typing import List, Optional
 
-SOFTVERSION = 3.1
-SOFTBUILD = 0
+SOFTVERSION = 3.2
+SOFTBUILDDATE = 0
 
 SUPPORTED_TEXT_FORMAT = (
     '.txt', '.lua', '.nut', '.cfg', '.json', '.xml', '.yaml', '.yml',
@@ -348,7 +348,7 @@ def print_header():
     art_lines = ascii_art.splitlines()
     max_width = max(len(line) for line in art_lines)
 
-    extra_lines = [f"KitsuneResource {SOFTVERSION}-{SOFTBUILD}"]
+    extra_lines = [f"KitsuneResource {SOFTVERSION} - {SOFTBUILDDATE}"]
 
     centered_extra = "\n".join(line.center(max_width) for line in extra_lines)
 

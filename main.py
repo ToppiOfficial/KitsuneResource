@@ -36,73 +36,20 @@ if not getattr(sys, 'frozen', False):
 
     check_and_activate_venv()
 
-import send2trash
-
 from utils import (
     Logger, PathResolver, timer, print_header, parse_config_json,
     resolve_json_path, SUPPORTED_TEXT_FORMAT, SUPPORTED_IMAGE_FORMAT,
     resolve_config_path
 )
 
+from core.archiver import Archiver
 from core.model import model_compile_studiomdl
 from core.gameinfo import get_game_search_paths
 from core.packager import package_archive
 from core.image import convert_image
+from core.texture_cache import TextureSignatureCache
 from core.qc import qc_read_materials, process_qc_file
 from core.vmt import VMTCreator
-
-class CompileFolderManager:
-    @staticmethod
-    def clean(compile_root: Path, logger: Logger, archived: bool = False):
-        os_logger = logger.with_context("OS")
-        
-        if not compile_root.exists() or not any(compile_root.iterdir()):
-            os_logger.info("No existing compile folder to clean.")
-            return
-        
-        if archived:
-            CompileFolderManager._archive(compile_root, os_logger)
-        else:
-            CompileFolderManager._trash(compile_root, os_logger)
-    
-    @staticmethod
-    def _archive(compile_root: Path, logger: Logger):
-        try:
-            archive_dir = compile_root.parent / "_archive"
-            archive_dir.mkdir(exist_ok=True)
-            
-            created_time = datetime.fromtimestamp(compile_root.stat().st_ctime)
-            timestamp = created_time.strftime("%Y-%m-%d_%H-%M-%S")
-            archive_target = archive_dir / f"{compile_root.name}_{timestamp}"
-            
-            shutil.move(str(compile_root), str(archive_target))
-            logger.info(f"Archived compile folder to: {archive_target}")
-        except Exception as e:
-            logger.warn(f"Failed to archive compile folder: {e}")
-    
-    @staticmethod
-    def _trash(compile_root: Path, logger: Logger, legacy_mode: bool = False):
-        def _trash_items():
-            for item in compile_root.iterdir():
-                try:
-                    send2trash.send2trash(item)
-                    logger.info(f"Sent to Recycle Bin: {item.relative_to(compile_root)}")
-                except Exception as e:
-                    logger.warn(f"Failed to remove {item}: {e}")
-        
-        logger.info("Cleaning existing compile folder...")
-        
-        if legacy_mode:
-            _trash_items()
-        else:
-            try:
-                send2trash.send2trash(compile_root)
-                logger.info(f"Sent to Recycle Bin: {compile_root.name}")
-                compile_root.mkdir(parents=True, exist_ok=True)
-            except Exception as e:
-                logger.error(f"Failed to remove compile folder: {e}")
-                logger.info("Falling back to item-by-item deletion...")
-                _trash_items()
 
 class DataProcessor:
     def __init__(self, compile_root: Path, vtfcmd_exe: Optional[Path], args, logger: Logger,
@@ -505,7 +452,7 @@ class ValveModelPipeline:
                 self.logger.info(f"Game directory: {gameinfo_dir}")
             self.logger.info("Materials, data sections, and Packaging will be skipped")
         else:
-            CompileFolderManager.clean(compile_root, self.logger, self.args.archive_old_ver)
+            Archiver.clean(compile_root, self.logger, self.args.archive_old_ver)
         
         if search_paths:
             self.logger.info("")
@@ -584,6 +531,7 @@ class ValveTexturePipeline:
         self.args = args
         self.logger = logger
         self.processed_files: Set[Path] = set()
+        self._sig_cache: Optional[TextureSignatureCache] = None
     
     def execute(self):
         vtfcmd, = PathResolver.resolve_and_validate(self.config, "vtfcmd")
@@ -605,9 +553,18 @@ class ValveTexturePipeline:
             self.logger.error(str(e))
             return
         
+        # Load (or create) the content-based signature cache.
+        # Stored inside root_dir (where the VTFs live), named after that folder.
+        # e.g. /project/my_textures/ -> /project/my_textures/my_textures.texsig
+        root_dir.mkdir(parents=True, exist_ok=True)
+        self._sig_cache = TextureSignatureCache.for_output_dir(root_dir)
+        self.logger.info(f"Texture signature cache: {root_dir / (root_dir.name + '.texsig')}")
+
         for key, entry in vtf_config.items():
             self._process_texture_group(key, entry, root_dir, vtfcmd)
-    
+
+        self._sig_cache.save()
+
     def _process_texture_group(self, key: str, entry: dict, root_dir: Path, vtfcmd: Path):
         self.logger.info(f"Processing texture group: {key}")
         
@@ -618,7 +575,7 @@ class ValveTexturePipeline:
         
         matching_files = self._find_matching_files(input_pattern, root_dir)
         if not matching_files:
-            self.logger.warn(f"No matching file(s) found for pattern: {input_pattern}")
+            self.logger.info(f"No matching file(s) found for pattern: {input_pattern}")
             return
         
         for src_file in matching_files:
@@ -673,11 +630,17 @@ class ValveTexturePipeline:
     def _should_skip_conversion(self, src_file: Path, output_path: Path) -> bool:
         if getattr(self.args, "forceupdate", False):
             return False
-        
+
         if not output_path.exists():
             return False
-        
-        return output_path.stat().st_mtime == src_file.stat().st_mtime
+
+        # content-based signature (format/mtime-agnostic).
+        # If the raw bytes haven't changed since the last successful
+        # conversion we can skip safely even if the file was re-saved.
+        if self._sig_cache is not None:
+            return self._sig_cache.is_unchanged(src_file)
+
+        return False
     
     def _convert_to_vtf(self, src_file: Path, output_path: Path, entry: dict, vtfcmd: Path):
         vtf_settings = entry.get("vtf", {})
@@ -695,6 +658,11 @@ class ValveTexturePipeline:
             )
             os.utime(output_path, (src_file.stat().st_atime, src_file.stat().st_mtime))
             self.logger.debug(f"Finished VTF: {output_path} (mtime synced to source)")
+
+            # Record the source image's content signature so future runs can
+            # skip this file even if its format changes.
+            if self._sig_cache is not None:
+                self._sig_cache.record(src_file)
         except Exception as e:
             self.logger.error(f"Failed to export {src_file} -> {output_path}: {e}")
 
