@@ -2,6 +2,31 @@ import subprocess, shutil, re
 from pathlib import Path
 from utils import Logger
 
+def _extract_modelname(qc_file: Path) -> str | None:
+    with qc_file.open("r", encoding="utf-8", errors="ignore") as f:
+        for line in f:
+            stripped = line.strip()
+            if stripped.lower().startswith("$modelname"):
+                parts = stripped.split(None, 1)
+                if len(parts) == 2:
+                    return parts[1].strip().strip('"')
+    return None
+
+
+def _ensure_model_output_dir(studiomdl_exe: Path, qc_file: Path, game_dir: Path | None, log: Logger):
+    modelname = _extract_modelname(qc_file)
+    if not modelname:
+        return
+
+    if game_dir:
+        target = Path(game_dir) / "models" / Path(modelname).parent
+    else:
+        target = studiomdl_exe.parent / "models" / Path(modelname).parent
+
+    target.mkdir(parents=True, exist_ok=True)
+    log.debug(f"Pre-created model output dir: {target}")
+
+
 def model_compile_studiomdl(studiomdl_exe: str | Path, qc_file: str | Path, output_dir: str | Path = None, game_dir: str | Path = None,
                             verbose: bool = False, logger: Logger = None) -> tuple[bool, list[Path], list[str]]:
     """
@@ -31,6 +56,9 @@ def model_compile_studiomdl(studiomdl_exe: str | Path, qc_file: str | Path, outp
     if game_dir:
         cmd += ["-game", str(Path(game_dir).resolve())]
     cmd.append(str(qc_file))
+
+    # ffs
+    _ensure_model_output_dir(studiomdl_exe, qc_file, Path(game_dir) if game_dir else None, log)
 
     try:
         result = subprocess.run(

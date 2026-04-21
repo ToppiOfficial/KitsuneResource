@@ -2,6 +2,7 @@ import vpk as vpklib
 from pathlib import Path
 from typing import List, Optional
 
+# TODO: Replace the vpk as when reading L4D2's vpk it just doesn't work!! idk why
 class GameVPKCache:
     """Lazily loads *_dir.vpk files from all game search paths and checks file membership."""
 

@@ -1,4 +1,4 @@
-import sys, os
+import sys, os, json
 from pathlib import Path
 import argparse, shutil, re
 from datetime import datetime
@@ -40,7 +40,8 @@ import send2trash
 
 from utils import (
     Logger, PathResolver, timer, print_header, parse_config_json,
-    resolve_json_path, SUPPORTED_TEXT_FORMAT, SUPPORTED_IMAGE_FORMAT
+    resolve_json_path, SUPPORTED_TEXT_FORMAT, SUPPORTED_IMAGE_FORMAT,
+    resolve_config_path
 )
 
 from core.model import model_compile_studiomdl
@@ -268,10 +269,6 @@ class ModelCompiler:
         self.logger.info("")
         model_logger = self.logger.with_context("MODEL")
         
-        if not model_data.get('compile', True):
-            model_logger.warn(f"Skipping model {model_name} (compile=false)")
-            return
-        
         model_logger.info(f"Compiling model: {model_name}")
         
         qc_path = Path(model_data.get("qc")).resolve()
@@ -337,9 +334,16 @@ class ModelCompiler:
     def _process_qc(self, qc_path: Path, logger: Logger, base_name: str, variables: dict = None, include_dirs: list = None) -> Path:
         temp_qc_name = f"temp_{base_name}.qc"
         temp_qc = qc_path.parent / temp_qc_name
-        qc_content = process_qc_file(qc_path, logger=logger, _variables=variables, include_dirs=include_dirs)
+
+        compiler_name = self.studiomdl_exe.stem.lower()
+
+        # NOTE: And I forgot to implement a stop when qc goes shit and still compile the qc
+        # 4/20/2026: Ideally it should now.
+        qc_content = process_qc_file(qc_path, logger=logger, _variables=variables, include_dirs=include_dirs, compiler=compiler_name)
+        
         with open(temp_qc, 'w', encoding='utf-8') as dst:
             dst.write(qc_content)
+            
         logger.info(f"Flattened QC {qc_path.name} to {temp_qc.name}")
         return temp_qc
     
@@ -531,7 +535,11 @@ class ValveModelPipeline:
         compiler = ModelCompiler(studiomdl_exe, search_paths, vtfcmd_exe, gameinfo_dir, self.args, self.logger,
                                  global_includedirs=global_includedirs)
 
+        only_filter = [e.lower() for e in self.args.only] if self.args.only else None
+
         for model_name, model_data in self.config.get("model", {}).items():
+            if only_filter and model_name.lower() not in only_filter:
+                continue
             compiler.compile_model(model_name, model_data, compile_root, global_vars=global_define_vars)
     
     def _process_material_sets(self, compile_root: Path, search_paths: List[Path]):
@@ -541,8 +549,11 @@ class ValveModelPipeline:
     def _process_data_sections(self, compile_root: Path, vtfcmd_exe: Optional[Path]):
         include_dirs = self.config.get("includedirs", [])
         processor = DataProcessor(compile_root, vtfcmd_exe, self.args, self.logger, include_dirs=include_dirs)
+        only_filter = [e.lower() for e in self.args.only] if self.args.only else None
 
         for folder_name, items in self.config.get("data", {}).items():
+            if only_filter and folder_name.lower() not in only_filter:
+                continue
             output_dir = compile_root if self.args.single_addon else compile_root / folder_name
             processor.process_items(items, output_dir)
     
@@ -721,6 +732,8 @@ def main():
                          help="Archive existing files instead of deletion.")
     model_group.add_argument("--single-addon", action="store_true",
                          help="Compile all output into a single addon folder defined by 'addonroot' in config.")
+    model_group.add_argument("--only", metavar="ENTRY", action="append", default=None,
+                         help="Only compile the specified model or data entry (case-insensitive). Can be specified multiple times.")
 
     texture_group = parser.add_argument_group("ValveTexture Pipeline")
     texture_group.add_argument("--forceupdate", action="store_true",
@@ -755,47 +768,8 @@ def main():
 
     args.basedir = Path.cwd()
 
-    def resolve_config_path(config_path_str: str) -> Optional[str]:
-        if not config_path_str or not config_path_str.strip():
-            logger.error("Config file path argument is empty. Please provide a valid path.")
-            return None
-
-        config_path = Path(config_path_str)
-        if config_path.exists() and config_path.is_file():
-            return str(config_path)
-
-        base_dir = Path(sys.executable).parent if getattr(sys, 'frozen', False) else Path(__file__).parent
-        configs_dir = base_dir / "configs"
-        config_filename = config_path.name
-
-        if not config_filename:
-            logger.warn(f"Could not determine a filename from '{config_path_str}'.")
-            return None
-
-        logger.info(f"Config file not found at '{config_path_str}'. Searching in '{configs_dir}'...")
-
-        if not configs_dir.is_dir():
-            logger.warn(f"The 'configs' directory does not exist at '{configs_dir}'.")
-            return None
-
-        candidate = configs_dir / config_path
-        found_files = [candidate] if candidate.is_file() else [f for f in configs_dir.rglob(config_filename) if f.is_file()]
-
-        if not found_files:
-            logger.warn(f"Could not find '{config_path_str}' in subfolders of '{configs_dir}'.")
-            return None
-
-        if len(found_files) > 1:
-            logger.warn(f"Found multiple '{config_filename}' files. Using the first one:")
-            for f in found_files:
-                logger.warn(f"  - {f}")
-
-        resolved = str(found_files[0])
-        logger.info(f"Found config file: {resolved}")
-        return resolved
-
     for config_path_str in args.config_paths:
-        resolved_path = resolve_config_path(config_path_str)
+        resolved_path = resolve_config_path(config_path_str, logger)
         if not resolved_path:
             logger.info("")
             continue
@@ -850,6 +824,29 @@ def main():
 
 if __name__ == "__main__":
     try:
+        if '--fetch' in sys.argv:
+            config_args = [a for a in sys.argv[1:] if not a.startswith('-')]
+            if not config_args:
+                print(json.dumps({"error": "No config path provided"}))
+                sys.exit(1)
+            try:
+                resolved = resolve_config_path(config_args[0])
+
+                if not resolved:
+                    print(json.dumps({"error": f"Config not found: {config_args[0]}"}))
+                    sys.exit(1)
+
+                config = parse_config_json(resolved)
+
+                print(json.dumps({
+                    "model": list(config.get("model", {}).keys()),
+                    "data":  list(config.get("data",  {}).keys()),
+                }))
+            except Exception as e:
+                print(json.dumps({"error": str(e)}))
+                sys.exit(1)
+
+            sys.exit(0)
         main()
     except KeyboardInterrupt:
         print("\n\nOperation cancelled by user.")

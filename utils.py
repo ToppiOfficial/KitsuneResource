@@ -4,7 +4,8 @@ from datetime import datetime
 from functools import wraps
 from typing import List, Optional
 
-SOFTVERSION = 2.8
+SOFTVERSION = 3.0
+SOFTBUILD = 0
 
 SUPPORTED_TEXT_FORMAT = (
     '.txt', '.lua', '.nut', '.cfg', '.json', '.xml', '.yaml', '.yml',
@@ -186,6 +187,7 @@ def timer(func):
         return logger
     return wrapper
 
+
 def resolve_json_path(json_path: str, config_file: Path, dir_override: Optional[Path] = None) -> Path:
     p = Path(str(json_path).strip("/\\"))
 
@@ -197,6 +199,55 @@ def resolve_json_path(json_path: str, config_file: Path, dir_override: Optional[
 
     return p.resolve()
 
+
+def resolve_config_path(config_path_str: str, logger: Optional[Logger] = None) -> Optional[str]:
+    
+    # well shit.
+    def log_info(msg):
+        if logger: logger.info(msg)
+    def log_warn(msg):
+        if logger: logger.warn(msg)
+    def log_error(msg):
+        if logger: logger.error(msg)
+
+    if not config_path_str or not config_path_str.strip():
+        log_error("Config file path argument is empty. Please provide a valid path.")
+        return None
+
+    config_path = Path(config_path_str)
+    if config_path.exists() and config_path.is_file():
+        return str(config_path)
+
+    base_dir = Path(sys.executable).parent if getattr(sys, 'frozen', False) else Path(__file__).parent
+    configs_dir = base_dir / "configs"
+    config_filename = config_path.name
+
+    if not config_filename:
+        log_warn(f"Could not determine a filename from '{config_path_str}'.")
+        return None
+
+    log_info(f"Config file not found at '{config_path_str}'. Searching in '{configs_dir}'...")
+
+    if not configs_dir.is_dir():
+        log_warn(f"The 'configs' directory does not exist at '{configs_dir}'.")
+        return None
+
+    candidate = configs_dir / config_path
+    found_files = [candidate] if candidate.is_file() else [f for f in configs_dir.rglob(config_filename) if f.is_file()]
+
+    if not found_files:
+        log_warn(f"Could not find '{config_path_str}' in subfolders of '{configs_dir}'.")
+        return None
+
+    if len(found_files) > 1:
+        log_warn(f"Found multiple '{config_filename}' files. Using the first one:")
+        for f in found_files: log_warn(f"  - {f}")
+
+    resolved = str(found_files[0])
+    log_info(f"Found config file: {resolved}")
+    return resolved
+
+
 def deep_merge(base: dict, override: dict) -> dict:
     result = base.copy()
     for key, value in override.items():
@@ -205,6 +256,7 @@ def deep_merge(base: dict, override: dict) -> dict:
         else:
             result[key] = value
     return result
+
 
 def parse_config_json(config_path: str, seen_paths=None, filter_keys=None) -> dict:
     def first_key_hook(pairs):
@@ -270,6 +322,7 @@ def parse_config_json(config_path: str, seen_paths=None, filter_keys=None) -> di
 
     return config
 
+
 def print_header():
     ascii_art = r"""
   _  _______ _______ _____ _    _ _   _ ______ _____  ______  _____  ____  _    _ _____   _____ ______ 
@@ -284,10 +337,7 @@ def print_header():
     art_lines = ascii_art.splitlines()
     max_width = max(len(line) for line in art_lines)
 
-    extra_lines = [
-        f"KitsuneResource {SOFTVERSION}",
-        "by Toppi"
-    ]
+    extra_lines = [f"KitsuneResource {SOFTVERSION}-{SOFTBUILD}"]
 
     centered_extra = "\n".join(line.center(max_width) for line in extra_lines)
 

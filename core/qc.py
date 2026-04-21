@@ -7,6 +7,20 @@ from core import vrd as vrd_module
 from core import flex_controllers
 from core.bone_animations import read_dmx_bone_animation, frames_quat_to_euler, frames_rotation_to_degrees, read_smd_bone_animation, apply_world_scale
 
+# TODO: This entirety is utterly retarded, refine how qc command are handled
+# Maybe process all $include first then start again at line 0 then parse all qc command
+
+# NOTE: Parsing cdmaterials just check every possibility which isn't efficient
+
+#
+# Variables
+#
+
+ORANGE = "\033[38;5;208m"
+RED    = "\033[91m"
+RESET  = "\033[0m"
+
+_CMP_RE = re.compile(r'^\s*([^\s"]+|"[^"]+")\s*(==|!=|>=|<=|>|<)\s*([^\s"]+|"[^"]+")\s*$')
 
 #
 # Condition evaluation
@@ -44,8 +58,6 @@ def _compare(left_str: str, op: str, right_str: str, variables: dict) -> bool:
     return False
 
 
-_CMP_RE = re.compile(r'^\s*([^\s"]+|"[^"]+")\s*(==|!=|>=|<=|>|<)\s*([^\s"]+|"[^"]+")\s*$')
-
 def _evaluate_condition(expression: str, variables: dict, is_ifdef: bool) -> bool:
     expression = expression.strip()
     for or_part in expression.split('||'):
@@ -73,14 +85,13 @@ def _eval_and_term(term: str, variables: dict) -> bool:
 class QCReturnException(Exception):
     pass
 
+class QCCompileError(Exception):
+    pass
+
 
 #
 # Processor
 #
-
-ORANGE = "\033[38;5;208m"
-RED    = "\033[91m"
-RESET  = "\033[0m"
 
 
 class QCProcessor:
@@ -94,7 +105,8 @@ class QCProcessor:
         macro_args_override: dict = None,
         include_dirs: list = None,
         root_dir: Path = None,
-        current_scale: float = 1.0
+        current_scale: float = 1.0,
+        compiler: str = None
     ):
         self.variables          = variables if variables is not None else {}
         self.macros             = macros    if macros    is not None else {}
@@ -108,14 +120,15 @@ class QCProcessor:
         self.defined_vars       = set(self.variables)
         self.pushd_stack        = []
         self.current_scale      = current_scale
+        self.compiler           = compiler
 
     def _log(self, level: str, color: str, msg: str):
         if self.logger:
             getattr(self.logger, level)(f"{color}{msg}{RESET}")
 
-    def _warn(self, msg: str): self._log("error",  ORANGE, msg)
-    def _err(self,  msg: str): self._log("error",  RED,    msg)
-    def _info(self, msg: str): self._log("info",   ORANGE, msg)
+    def _warn(self, msg: str): self._log("warn",  ORANGE, msg)
+    def _err(self,  msg: str): self._log("error", RED,    msg)
+    def _info(self, msg: str): self._log("info",  ORANGE, msg)
 
     def _parse_command(self, line: str) -> list:
         try:
@@ -135,7 +148,7 @@ class QCProcessor:
                 return str(self.variables[name])
             has_error = True
             if line_num:
-                self._err(f"ERROR Line {line_num}: Undefined variable '${name}$'")
+                self._err(f"Line {line_num}: Undefined variable '${name}$'")
             return match.group(0)
 
         return re.sub(r'\$(\w+)\$', replace, line), has_error
@@ -225,7 +238,7 @@ class QCProcessor:
 
     def _handle_pushd(self, parts: list, line_num: int, base_dir: Path, original_line: str) -> str:
         if len(parts) < 2:
-            self._warn(f"WARNING Line {line_num}: $pushd without a path")
+            self._warn(f"Line {line_num}: $pushd without a path")
             return original_line
         raw, _ = self._substitute_variables(parts[1], line_num)
         dir_path = Path(raw.strip().strip('"'))
@@ -237,22 +250,21 @@ class QCProcessor:
 
     def _handle_popd(self, line_num: int, original_line: str) -> str:
         if not self.pushd_stack:
-            self._warn(f"WARNING Line {line_num}: $popd without matching $pushd")
+            self._warn(f"Line {line_num}: $popd without matching $pushd")
         else:
             self.pushd_stack.pop()
         return original_line
 
     def _eval_fileexist(self, parts: list, line_num: int, base_dir: Path) -> bool:
         if len(parts) < 2:
-            self._warn(f"WARNING Line {line_num}: $iffileexist without a path")
+            self._warn(f"Line {line_num}: $iffileexist without a path")
             return False
 
         raw, err = self._substitute_variables(parts[1], line_num)
         if err:
-            self._warn(f"WARNING Line {line_num}: Undefined variable in $iffileexist path")
+            self._warn(f"Line {line_num}: Undefined variable in $iffileexist path")
 
         file_path = Path(raw.strip().strip('"'))
-        
         is_qc_file = file_path.suffix.lower() in (".qc", ".qci")
 
         if self.pushd_stack and not is_qc_file:
@@ -306,6 +318,7 @@ class QCProcessor:
 
     def _handle_define_variable(self, parts: list, line_num: int, line: str) -> Optional[str]:
         if len(parts) < 3:
+            self._warn(f"Line {line_num}: Malformed $definevariable: {line}")
             return f"// WARNING Line {line_num}: Malformed $definevariable: {line}\n"
         try:
             name = parts[1]
@@ -314,22 +327,24 @@ class QCProcessor:
                 return f"// ERROR Line {line_num}: Undefined variable in expression for $definevariable: {line.rstrip()}\n"
 
             if name in self.macro_args_override:
-                self._warn(f"WARNING Line {line_num}: Cannot define variable '{name}' - shadowed by macro argument")
+                self._warn(f"Line {line_num}: Cannot define variable '{name}' - shadowed by macro argument")
                 return f"// WARNING Line {line_num}: Variable '{name}' shadowed by macro argument, ignoring\n"
             if name in self.json_vars:
                 return f"// Overridden by JSON config: {line}\n"
             if name in self.defined_vars:
-                self._warn(f"WARNING Line {line_num}: Variable '{name}' already defined, ignoring redefinition")
+                self._warn(f"Line {line_num}: Variable '{name}' already defined, ignoring redefinition")
                 return f"// WARNING Line {line_num}: Variable '{name}' already defined, ignoring\n"
 
             self.variables[name] = self._eval_value(raw)
             self.defined_vars.add(name)
             return None
         except Exception as e:
+            self._warn(f"Line {line_num}: Failed to parse $definevariable: {line} ({e})")
             return f"// WARNING Line {line_num}: Failed to parse $definevariable: {line} ({e})\n"
 
     def _handle_redefine_variable(self, parts: list, line_num: int, line: str) -> Optional[str]:
         if len(parts) < 3:
+            self._warn(f"Line {line_num}: Malformed $redefinevariable: {line}")
             return f"// WARNING Line {line_num}: Malformed $redefinevariable: {line}\n"
         try:
             name = parts[1]
@@ -338,16 +353,17 @@ class QCProcessor:
                 return f"// ERROR Line {line_num}: Undefined variable in expression for $redefinevariable: {line.rstrip()}\n"
 
             if name in self.macro_args_override:
-                self._err(f"ERROR Line {line_num}: Cannot redefine macro argument '{name}'")
+                self._err(f"Line {line_num}: Cannot redefine macro argument '{name}'")
                 return f"// ERROR Line {line_num}: Cannot redefine macro argument '{name}'\n"
             if name not in self.defined_vars:
-                self._err(f"ERROR Line {line_num}: Cannot redefine undefined variable '{name}'")
+                self._err(f"Line {line_num}: Cannot redefine undefined variable '{name}'")
                 return f"// ERROR Line {line_num}: Cannot redefine undefined variable '{name}'\n"
 
             self.variables[name] = self._eval_value(raw)
-            self._info(f"INFO Line {line_num}: Variable '{name}' redefined to '{self.variables[name]}'")
+            self._info(f"Line {line_num}: Variable '{name}' redefined to '{self.variables[name]}'")
             return None
         except Exception as e:
+            self._warn(f"Line {line_num}: Failed to parse $redefinevariable: {line} ({e})")
             return f"// WARNING Line {line_num}: Failed to parse $redefinevariable: {line} ({e})\n"
 
     def _resolve_include(self, include_file: str, base_dir: Path) -> tuple[Path, bool]:
@@ -403,11 +419,12 @@ class QCProcessor:
     def _handle_include(self, original_line: str, parts: list, line_num: int,
                         base_dir: Path, include_stack: set, processed_line: str) -> str:
         if len(parts) < 2:
+            self._warn(f"Line {line_num}: $include without path: {original_line.rstrip()}")
             return f"// WARNING Line {line_num}: $include without path: {original_line.rstrip()}\n"
 
         include_file, err = self._substitute_variables(parts[1], line_num)
         if err:
-            self._warn(f"WARNING Line {line_num}: Undefined variable in $include path, using literal")
+            self._warn(f"Line {line_num}: Undefined variable in $include path, using literal")
             include_file = parts[1]
 
         target, from_dirs = self._resolve_include(include_file, base_dir)
@@ -426,6 +443,7 @@ class QCProcessor:
             raise FileNotFoundError(msg)
 
         if target in include_stack:
+            self._warn(f"Line {line_num}: Circular include detected: {include_file}")
             return f"// WARNING Line {line_num}: Circular include detected: {include_file}\n"
 
         header = f"\n// NOTE: Original path '{include_file}' not found, using includedirs: {target}\n" if from_dirs else "\n"
@@ -442,11 +460,12 @@ class QCProcessor:
                 _root_dir=self.root_dir,
                 _pushd_stack=self.pushd_stack,
                 _vrd_name_counts=self.vrd_name_counts,
-                _current_scale=self.current_scale
+                _current_scale=self.current_scale,
+                compiler=self.compiler
             )
             return header + nested + "\n"
         except Exception as e:
-            msg = f"ERROR Line {line_num}: Failed to process include '{include_file}': {e}"
+            msg = f"Line {line_num}: Failed to process include '{include_file}': {e}"
             if self.logger: self.logger.error(msg)
             return f"// {msg}\n"
 
@@ -461,14 +480,15 @@ class QCProcessor:
             if i < len(provided):
                 arg_mapping[arg_name] = provided[i]
             else:
-                self._warn(f"WARNING Line {line_num}: Macro '{macro_name}' expects argument '{arg_name}' but none provided")
+                self._warn(f"Line {line_num}: Macro '{macro_name}' expects argument '{arg_name}' but none provided")
 
         processor = QCProcessor(
             self.variables.copy(), self.macros, self.logger,
             macro_args_override=arg_mapping,
             include_dirs=self.include_dirs,
             root_dir=self.root_dir,
-            current_scale=self.current_scale
+            current_scale=self.current_scale,
+            compiler=self.compiler
         )
         processor.defined_vars = self.defined_vars.copy()
         processor.pushd_stack  = list(self.pushd_stack)
@@ -489,29 +509,29 @@ def _format_qc_output(text: str) -> str:
     result = []
     depth = 0
     consecutive_newlines = 0
-    
+
     for line in lines:
         stripped = line.strip()
-        
+
         if not stripped:
             consecutive_newlines += 1
             if consecutive_newlines <= 1:
                 result.append("")
             continue
-            
+
         consecutive_newlines = 0
-        
-        if depth == 0:
-            formatted_line = stripped
-        else:
-            formatted_line = line.rstrip()
-            
-        depth += line.count('{') - line.count('}')
-        if depth < 0:
-            depth = 0
-            
+
+        net = stripped.count('{') - stripped.count('}')
+        if net < 0:
+            depth = max(0, depth + net)
+
+        formatted_line = stripped if depth == 0 else '\t' * depth + stripped
+
+        if net > 0:
+            depth += net
+
         result.append(formatted_line)
-        
+
     return "\n".join(result).strip() + "\n"
 
 
@@ -526,7 +546,8 @@ def process_qc_file(
     _root_dir: Path = None,
     _pushd_stack: list = None,
     _vrd_name_counts: dict = None,
-    _current_scale: float = 1.0
+    _current_scale: float = 1.0,
+    compiler: str = None
 ) -> str:
 
     _include_stack = _include_stack or set()
@@ -538,17 +559,22 @@ def process_qc_file(
     try:
         resolved = qc_path.resolve(strict=True)
     except FileNotFoundError:
-        return f"// ERROR: $include or qc file not found: {qc_path.as_posix()}\n"
+        raise QCCompileError(f"QC file not found: {qc_path.as_posix()}")
     except Exception as e:
-        return f"// ERROR: Failed to resolve path '{qc_path.as_posix()}': {e}\n"
+        raise QCCompileError(f"Failed to resolve path '{qc_path.as_posix()}': {e}")
 
     if resolved in _include_stack:
-        return f"// ERROR: Circular $include detected! '{resolved.as_posix()}' is already in the include stack.\n"
+        raise QCCompileError(f"Circular $include detected: '{resolved.as_posix()}' is already in the include stack.")
 
     _include_stack.add(resolved)
     _root_dir = _root_dir or resolved.parent
 
-    processor = QCProcessor(_variables, _macros, logger, include_dirs=include_dirs or [], root_dir=_root_dir, current_scale=_current_scale)
+    processor = QCProcessor(_variables, _macros,
+                            logger, include_dirs=include_dirs or [],
+                            root_dir=_root_dir,
+                            current_scale=_current_scale,
+                            compiler=compiler)
+    
     processor.defined_vars    = _defined_vars
     processor.pushd_stack     = _pushd_stack
     processor.vrd_name_counts = _vrd_name_counts if _vrd_name_counts is not None else {}
@@ -562,7 +588,7 @@ def process_qc_file(
 
     i = 0
     new_bonemerge          = set()
-    new_lookat_attachments = {}  # stripped_target -> list of (location, rotation, attachment_name)
+    new_lookat_attachments = {}
 
     while i < len(all_lines):
         line     = all_lines[i]
@@ -602,79 +628,98 @@ def process_qc_file(
 
         if command in ("$nekodriverbone", "$driverbone"):
             if len(parts) < 2:
-                output_lines.append(f"// WARNING Line {line_num}: {command} missing driver bone name\n")
-                continue
+                msg = f"Line {line_num}: {command} missing driver bone name"
+                if logger: logger.error(msg)
+                raise QCCompileError(msg)
+
             driver_bone = parts[1].strip('"')
             block, i = vrd_module._parse_driverbone_block(all_lines, i)
-            if block and block["pose"] and block["target_bones"]:
-                pose_stem = Path(block["pose"]).stem.lower()
-                vrd_name = re.sub(r'[^\w]', '_', f"{pose_stem}_{driver_bone.lower()}")
-                count = processor.vrd_name_counts.get(vrd_name, 0)
-                processor.vrd_name_counts[vrd_name] = count + 1
-                if count > 0:
-                    vrd_name = f"{vrd_name}_{count}"
-                try:
-                    pose_base = processor.pushd_stack[-1] if processor.pushd_stack else _root_dir
-                    vrd_module.generate_vrd(
-                        driver_bone, block["pose"], block["triggers"],
-                        block["target_bones"], pose_base, _root_dir, vrd_name, processor.current_scale,
-                        logger=logger
-                    )
-                    for target_bone in block["target_bones"]:
-                        if target_bone in new_bonemerge:
-                            continue
-                        output_lines.append(f'$bonemerge "{target_bone}"\n')
-                        new_bonemerge.add(target_bone)
-                    output_lines.append(f'// VRD Scale: {processor.current_scale}"\n')
-                    output_lines.append(f'$proceduralbones "vrds/{vrd_name}.vrd"\n')
-                except Exception as e:
-                    output_lines.append(f"// ERROR Line {line_num}: Failed to generate VRD for '{driver_bone}': {e}\n")
-            else:
-                output_lines.append(f"// WARNING Line {line_num}: {command} block incomplete, skipped\n")
+
+            if not block or not block["pose"] or not block["target_bones"]:
+                msg = f"Line {line_num}: {command} '{driver_bone}' block is incomplete (missing pose or target bones)"
+                if logger: logger.error(msg)
+                raise QCCompileError(msg)
+
+            pose_stem = Path(block["pose"]).stem.lower()
+            vrd_name  = re.sub(r'[^\w]', '_', f"{pose_stem}_{driver_bone.lower()}")
+            count = processor.vrd_name_counts.get(vrd_name, 0)
+            processor.vrd_name_counts[vrd_name] = count + 1
+            if count > 0:
+                vrd_name = f"{vrd_name}_{count}"
+
+            pose_base = processor.pushd_stack[-1] if processor.pushd_stack else _root_dir
+            try:
+                vrd_module.generate_vrd(
+                    driver_bone, block["pose"], block["triggers"],
+                    block["target_bones"], pose_base, _root_dir, vrd_name, processor.current_scale,
+                    logger=logger
+                )
+            except Exception as e:
+                msg = f"Line {line_num}: Failed to generate VRD for '{driver_bone}': {e}"
+                if logger: logger.error(msg)
+                raise QCCompileError(msg)
+
+            for target_bone in block["target_bones"]:
+                if target_bone in new_bonemerge:
+                    continue
+                output_lines.append(f'$bonemerge "{target_bone}"\n')
+                new_bonemerge.add(target_bone)
+            output_lines.append(f'// VRD Scale: {processor.current_scale}"\n')
+            output_lines.append(f'$proceduralbones "vrds/{vrd_name}.vrd"\n')
             continue
 
         if command == "$driverlookatbone":
             if len(parts) < 2:
-                output_lines.append(f"// WARNING Line {line_num}: $driverlookatbone missing bone name\n")
-                continue
+                msg = f"Line {line_num}: $driverlookatbone missing bone name"
+                if logger: logger.error(msg)
+                raise QCCompileError(msg)
+
             target_bone = parts[1].strip('"')
             block, i = vrd_module._parse_driverlookatbone_block(all_lines, i)
-            if block and block["pose"] and block["helper_bones"]:
-                pose_stem = Path(block["pose"]).stem.lower()
-                vrd_name = re.sub(r'[^\w]', '_', f"lookat_{pose_stem}_{target_bone.lower()}")
-                count = processor.vrd_name_counts.get(vrd_name, 0)
-                processor.vrd_name_counts[vrd_name] = count + 1
-                if count > 0:
-                    vrd_name = f"{vrd_name}_{count}"
-                try:
-                    pose_base = processor.pushd_stack[-1] if processor.pushd_stack else _root_dir
-                    stripped_target = target_bone.split('.')[-1]
-                    loc, rot = block["location"], block["rotation"]
-                    existing = new_lookat_attachments.get(stripped_target, [])
-                    attachment_name = next((n for l, r, n in existing if l == loc and r == rot), None)
-                    if attachment_name is None:
-                        base = f"{stripped_target}_lookattarget"
-                        attachment_name = base if not existing else f"{base}_{len(existing)}"
-                        existing.append((loc, rot, attachment_name))
-                        new_lookat_attachments[stripped_target] = existing
-                        pos_str = " ".join(f"{v:g}" for v in loc)
-                        rot_str = " ".join(f"{v:g}" for v in rot)
-                        output_lines.append(f'$attachment "{attachment_name}" "{target_bone}" {pos_str} rotate {rot_str}\n')
-                    vrd_module.generate_lookat_vrd(
-                        target_bone, attachment_name, block["frame"], block["aimvector"], block["upvector"],
-                        block["helper_bones"], block["pose"], pose_base, _root_dir, vrd_name,
-                        processor.current_scale, logger=logger
-                    )
-                    for helper_bone in block["helper_bones"]:
-                        if helper_bone not in new_bonemerge:
-                            output_lines.append(f'$bonemerge "{helper_bone}"\n')
-                            new_bonemerge.add(helper_bone)
-                    output_lines.append(f'// VRD Scale: {processor.current_scale}\n')
-                    output_lines.append(f'$proceduralbones "vrds/{vrd_name}.vrd"\n')
-                except Exception as e:
-                    output_lines.append(f"// ERROR Line {line_num}: Failed to generate lookat VRD for '{target_bone}': {e}\n")
-            else:
-                output_lines.append(f"// WARNING Line {line_num}: $driverlookatbone block incomplete, skipped\n")
+
+            if not block or not block["pose"] or not block["helper_bones"]:
+                msg = f"Line {line_num}: $driverlookatbone '{target_bone}' block is incomplete (missing pose or helper bones)"
+                if logger: logger.error(msg)
+                raise QCCompileError(msg)
+
+            pose_stem = Path(block["pose"]).stem.lower()
+            vrd_name  = re.sub(r'[^\w]', '_', f"lookat_{pose_stem}_{target_bone.lower()}")
+            count = processor.vrd_name_counts.get(vrd_name, 0)
+            processor.vrd_name_counts[vrd_name] = count + 1
+            if count > 0:
+                vrd_name = f"{vrd_name}_{count}"
+
+            pose_base = processor.pushd_stack[-1] if processor.pushd_stack else _root_dir
+            stripped_target = target_bone.split('.')[-1]
+            loc, rot = block["location"], block["rotation"]
+            existing = new_lookat_attachments.get(stripped_target, [])
+            attachment_name = next((n for l, r, n in existing if l == loc and r == rot), None)
+            if attachment_name is None:
+                base = f"{stripped_target}_lookattarget"
+                attachment_name = base if not existing else f"{base}_{len(existing)}"
+                existing.append((loc, rot, attachment_name))
+                new_lookat_attachments[stripped_target] = existing
+                pos_str = " ".join(f"{v:g}" for v in loc)
+                rot_str = " ".join(f"{v:g}" for v in rot)
+                output_lines.append(f'$attachment "{attachment_name}" "{target_bone}" {pos_str} rotate {rot_str}\n')
+
+            try:
+                vrd_module.generate_lookat_vrd(
+                    target_bone, attachment_name, block["frame"], block["aimvector"], block["upvector"],
+                    block["helper_bones"], block["pose"], pose_base, _root_dir, vrd_name,
+                    processor.current_scale, logger=logger
+                )
+            except Exception as e:
+                msg = f"Line {line_num}: Failed to generate lookat VRD for '{target_bone}': {e}"
+                if logger: logger.error(msg)
+                raise QCCompileError(msg)
+
+            for helper_bone in block["helper_bones"]:
+                if helper_bone not in new_bonemerge:
+                    output_lines.append(f'$bonemerge "{helper_bone}"\n')
+                    new_bonemerge.add(helper_bone)
+            output_lines.append(f'// VRD Scale: {processor.current_scale}\n')
+            output_lines.append(f'$proceduralbones "vrds/{vrd_name}.vrd"\n')
             continue
 
         if command == "$definemacro":
@@ -685,6 +730,7 @@ def process_qc_file(
                 current_macro = {'name': macro_parts[1], 'args': macro_parts[2:]}
                 macro_lines   = []
             else:
+                if logger: logger.warn(f"Line {line_num}: Malformed $definemacro: {stripped}")
                 output_lines.append(f"// WARNING Line {line_num}: Malformed $definemacro: {stripped}\n")
             continue
 
@@ -697,6 +743,35 @@ def process_qc_file(
                 block_lines.extend(inner_lines)
 
             block_content = "".join(block_lines)
+
+            if processor.current_scale != 1.0 and compiler != 'nekomdl':
+                scaled_lines = []
+                for bl in block_content.splitlines(True):
+                    btokens = processor._parse_command(bl.strip())
+                    bkw = btokens[0].lower() if btokens else ""
+                    # mouth  <int> <flex> <bone> X Y Z
+                    # spherenormals <mat> X Y Z
+                    # eyeball <n> <bone> X Y Z <mat> ...
+                    xyz_index = {"mouth": 4, "spherenormals": 2, "eyeball": 3}.get(bkw)
+                    if xyz_index and len(btokens) >= xyz_index + 3:
+                        try:
+                            x = float(btokens[xyz_index])     * processor.current_scale
+                            y = float(btokens[xyz_index + 1]) * processor.current_scale
+                            z = float(btokens[xyz_index + 2]) * processor.current_scale
+                            btokens[xyz_index]     = f"{x:g}"
+                            btokens[xyz_index + 1] = f"{y:g}"
+                            btokens[xyz_index + 2] = f"{z:g}"
+                            if bkw == "eyeball":
+                                try:
+                                    btokens[-1] = f"{float(btokens[-1]) * processor.current_scale:g}"
+                                except ValueError:
+                                    pass
+                            bl = " ".join(f'"{t}"' if " " in t else t for t in btokens) + "\n"
+                        except ValueError:
+                            pass
+                    scaled_lines.append(bl)
+                block_content = "".join(scaled_lines)
+
             sub_parts = processor._parse_command(line.strip())
 
             if len(sub_parts) >= 3 and sub_parts[2].lower().endswith(".dmx"):
@@ -710,6 +785,7 @@ def process_qc_file(
                         logger.info(f"Constructed {count} flex controllers from {dmx_path.name}")
                     output_lines.append(res_content)
                 else:
+                    if logger: logger.warn(f"Line {line_num}: Could not resolve DMX '{dmx_raw}' for $model, flex controllers skipped")
                     output_lines.append(f"// WARNING Line {line_num}: Could not resolve DMX '{dmx_raw}'\n")
                     output_lines.append(block_content)
             else:
@@ -718,6 +794,7 @@ def process_qc_file(
 
         if command in ("$defineskeletonhierarchy", "$defineskeletonheirarchy"):
             if len(parts) < 2:
+                if logger: logger.warn(f"Line {line_num}: {command} requires a DMX path")
                 output_lines.append(f"// WARNING Line {line_num}: {command} requires a DMX path\n")
                 continue
 
@@ -751,10 +828,11 @@ def process_qc_file(
                 dmx_path = processor._resolve_dmx_path(dmx_raw + ".dmx", resolved.parent)
                 if not dmx_path:
                     dmx_path = processor._resolve_dmx_path(dmx_raw + ".smd", resolved.parent)
-                    
+
             if not dmx_path:
-                output_lines.append(f"// WARNING Line {line_num}: could not resolve DMX '{dmx_raw}'\n")
-                continue
+                msg = f"Line {line_num}: {command} could not resolve '{dmx_raw}'"
+                if logger: logger.error(msg)
+                raise QCCompileError(msg)
 
             try:
                 ext = dmx_path.suffix.lower()
@@ -766,9 +844,8 @@ def process_qc_file(
                     continue
 
                 if frames:
-                    frame = frames[0]
+                    frame    = frames[0]
                     bone_map = {bt.bone_name: bt for bt in frame}
-
                     bones_to_write = target_bones if target_bones else list(bone_map.keys())
 
                     for bone_name in bones_to_write:
@@ -777,16 +854,21 @@ def process_qc_file(
                             parent = f'"{bt.parent_name}"' if bt.parent_name else '""'
                             output_lines.append(f'$hierarchy "{bone_name}" {parent}\n')
                         else:
+                            if logger: logger.warn(f"Line {line_num}: bone '{bone_name}' not found in '{dmx_raw}'")
                             output_lines.append(f"// WARNING: bone '{bone_name}' not found\n")
                 else:
+                    if logger: logger.warn(f"Line {line_num}: no frames found in '{dmx_raw}'")
                     output_lines.append(f"// WARNING: no frames found in '{dmx_raw}'\n")
             except Exception as e:
-                output_lines.append(f"// ERROR: {e}\n")
-            
+                msg = f"Line {line_num}: Failed to read '{dmx_raw}': {e}"
+                if logger: logger.error(msg)
+                raise QCCompileError(msg)
+
             continue
 
         if command == "$defineskeleton":
             if len(parts) < 3:
+                if logger: logger.warn(f"Line {line_num}: $defineskeleton requires a DMX path and frame index")
                 output_lines.append(f"// WARNING Line {line_num}: $defineskeleton requires a DMX path and frame index\n")
                 continue
 
@@ -794,12 +876,12 @@ def process_qc_file(
             try:
                 frame_idx = int(parts[2])
             except ValueError:
+                if logger: logger.warn(f"Line {line_num}: $defineskeleton frame index must be an integer")
                 output_lines.append(f"// WARNING Line {line_num}: $defineskeleton frame index must be an integer\n")
                 continue
 
             target_bones = []
 
-            # Find opening brace — may be on the same line or the next
             brace_line = stripped
             if "{" not in brace_line and i < len(all_lines):
                 brace_line = all_lines[i].strip()
@@ -827,10 +909,11 @@ def process_qc_file(
                 dmx_path = processor._resolve_dmx_path(dmx_raw + ".dmx", resolved.parent)
                 if not dmx_path:
                     dmx_path = processor._resolve_dmx_path(dmx_raw + ".smd", resolved.parent)
-                    
+
             if not dmx_path:
-                output_lines.append(f"// WARNING Line {line_num}: could not resolve DMX '{dmx_raw}'\n")
-                continue
+                msg = f"Line {line_num}: $defineskeleton could not resolve '{dmx_raw}'"
+                if logger: logger.error(msg)
+                raise QCCompileError(msg)
 
             try:
                 ext = dmx_path.suffix.lower()
@@ -848,13 +931,9 @@ def process_qc_file(
                     frames = apply_world_scale(frames, processor.current_scale)
 
                 if frame_idx < len(frames):
-                    frame = frames[frame_idx]
+                    frame    = frames[frame_idx]
                     bone_map = {bt.bone_name: bt for bt in frame}
-
-                    if not target_bones:
-                        bones_to_write = list(bone_map.keys())
-                    else:
-                        bones_to_write = target_bones
+                    bones_to_write = target_bones if target_bones else list(bone_map.keys())
 
                     for bone_name in bones_to_write:
                         bt = bone_map.get(bone_name)
@@ -869,15 +948,23 @@ def process_qc_file(
                                 f'0 0 0 0 0 0\n'
                             )
                         else:
+                            if logger: logger.warn(f"Line {line_num}: bone '{bone_name}' not found in '{dmx_raw}'")
                             output_lines.append(f"// WARNING: bone '{bone_name}' not found\n")
+                else:
+                    if logger: logger.warn(f"Line {line_num}: frame index {frame_idx} out of range in '{dmx_raw}'")
+                    output_lines.append(f"// WARNING: frame index {frame_idx} out of range in '{dmx_raw}'\n")
+            except QCCompileError:
+                raise
             except Exception as e:
-                output_lines.append(f"// ERROR: {e}\n")
-            
+                msg = f"Line {line_num}: Failed to read '{dmx_raw}': {e}"
+                if logger: logger.error(msg)
+                raise QCCompileError(msg)
+
             continue
 
         if command == "$rendermeshlist":
-            replace_rules = []
-            mesh_names = []
+            replace_rules  = []
+            mesh_names     = []
             ignore_missing = False
 
             brace_line = stripped
@@ -887,6 +974,7 @@ def process_qc_file(
                     i += 1
 
             if "{" not in brace_line:
+                if logger: logger.warn(f"Line {line_num}: $rendermeshlist missing opening brace")
                 output_lines.append(f"// WARNING Line {line_num}: $rendermeshlist missing opening brace\n")
                 continue
 
@@ -898,7 +986,7 @@ def process_qc_file(
                     return
                 keyword = tokens[0].lower()
                 if keyword == "replace" and len(tokens) >= 2:
-                    pattern = tokens[1]
+                    pattern     = tokens[1]
                     replacement = tokens[2] if len(tokens) >= 3 else ""
                     replace_rules.append((pattern, replacement))
                 elif keyword == "ignore_missing" and len(tokens) >= 2:
@@ -937,9 +1025,11 @@ def process_qc_file(
 
                 if not dmx_path:
                     if ignore_missing:
+                        if logger: logger.warn(f"Line {line_num}: $rendermeshlist '{mesh_name}' not found, skipping")
                         output_lines.append(f"// WARNING: '{mesh_name}' not found\n")
                         output_lines.append(f'// $body "{body_name}" "{file_str}"\n')
                     else:
+                        if logger: logger.warn(f"Line {line_num}: $rendermeshlist could not resolve '{mesh_name}'")
                         output_lines.append(f"// WARNING Line {line_num}: $rendermeshlist could not resolve '{mesh_name}'\n")
                         output_lines.append(f'$body "{body_name}" "{file_str}"\n')
                     continue

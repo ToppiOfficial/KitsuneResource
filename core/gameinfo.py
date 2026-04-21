@@ -33,6 +33,7 @@ def get_game_search_paths(gameinfo_file: str | Path) -> list[Path]:
         if "|gameinfo_path|" in entry:
             paths.append(base_dir)
         elif "|all_source_engine_paths|" in entry:
+            # I don't know how this gameinfo parameter work so let us just treat it as a regular path.
             entry = entry.replace("|all_source_engine_paths|", "")
             if entry.endswith(".vpk"):
                 entry = str(Path(entry).parent)
