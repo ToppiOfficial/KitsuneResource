@@ -965,6 +965,7 @@ def process_qc_file(
         if command == "$rendermeshlist":
             replace_rules  = []
             mesh_names     = []
+            variants       = []
             ignore_missing = False
 
             brace_line = stripped
@@ -1004,7 +1005,11 @@ def process_qc_file(
             if depth > 0:
                 inner_lines, i = processor._collect_block(all_lines, i, depth, resolved.parent)
                 for bl in inner_lines:
-                    parse_rendermesh_tokens(processor._parse_command(bl.strip()))
+                    toks = processor._parse_command(bl.strip())
+                    if toks and toks[0].lower() in ("suffix", "prefix") and len(toks) >= 2:
+                        variants.append((toks[0].lower(), toks[1].strip('"')))
+                    else:
+                        parse_rendermesh_tokens(toks)
 
             for mesh_name in mesh_names:
                 body_name = mesh_name
@@ -1028,13 +1033,28 @@ def process_qc_file(
                         if logger: logger.warn(f"Line {line_num}: $rendermeshlist '{mesh_name}' not found, skipping")
                         output_lines.append(f"// WARNING: '{mesh_name}' not found\n")
                         output_lines.append(f'// $body "{body_name}" "{file_str}"\n')
+                        continue
                     else:
                         if logger: logger.warn(f"Line {line_num}: $rendermeshlist could not resolve '{mesh_name}'")
                         output_lines.append(f"// WARNING Line {line_num}: $rendermeshlist could not resolve '{mesh_name}'\n")
-                        output_lines.append(f'$body "{body_name}" "{file_str}"\n')
-                    continue
 
                 output_lines.append(f'$body "{body_name}" "{file_str}"\n')
+
+                for vtype, vstring in variants:
+                    p = Path(file_str)
+                    if vtype == "suffix":
+                        var_body = body_name + vstring
+                        var_file = str(p.with_name(p.stem + vstring + p.suffix)).replace("\\", "/")
+                    else:
+                        var_body = vstring + body_name
+                        var_file = str(p.with_name(vstring + p.stem + p.suffix)).replace("\\", "/")
+
+                    if ignore_missing and not processor._resolve_dmx_path(var_file, resolved.parent):
+                        if logger: logger.warn(f"Line {line_num}: $rendermeshlist variant '{var_file}' not found, skipping")
+                        output_lines.append(f"// WARNING: variant '{var_file}' not found\n")
+                        output_lines.append(f'// $body "{var_body}" "{var_file}"\n')
+                    else:
+                        output_lines.append(f'$body "{var_body}" "{var_file}"\n')
 
             continue
 

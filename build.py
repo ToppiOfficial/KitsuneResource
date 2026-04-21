@@ -3,7 +3,7 @@ EXE_NAME = "kitsuneresource"
 ICON_PATH = "icon.png"
 ONE_FILE = True
 
-UTILS_FILE = "utils.py"  # File where SOFTBUILD lives
+UTILS_FILE = "utils.py"
 
 import subprocess
 import sys
@@ -27,14 +27,14 @@ def detect_environment():
 
 def stamp_build(build_stamp: int) -> str:
     """
-    Replaces SOFTBUILD in utils.py with the given stamp.
+    Replaces SOFTBUILDDATE in utils.py with the given stamp.
     Returns the original file content so it can be restored later.
     """
     with open(UTILS_FILE, "r", encoding="utf-8") as f:
         original = f.read()
 
     patched = re.sub(
-        r"^(SOFTBUILD\s*=\s*).*$",
+        r"^(SOFTBUILDDATE\s*=\s*).*$",
         rf"\g<1>{build_stamp}",
         original,
         flags=re.MULTILINE
@@ -68,7 +68,7 @@ def build_executable():
 
     # Patch utils.py and keep the original to restore after build
     original_utils = stamp_build(build_stamp)
-    print(f"Stamped SOFTBUILD = {build_stamp} into {UTILS_FILE}\n")
+    print(f"Stamped SOFTBUILDDATE = {build_stamp} into {UTILS_FILE}\n")
 
     cmd = [
         "pyinstaller",
@@ -106,7 +106,7 @@ def build_executable():
     finally:
         # Always restore utils.py to its original state
         restore_build(original_utils)
-        print(f"\nRestored {UTILS_FILE} to original state (SOFTBUILD = 0).")
+        print(f"\nRestored {UTILS_FILE} to original state (SOFTBUILDDATE = 0).")
 
     return success
 
