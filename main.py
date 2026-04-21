@@ -274,7 +274,7 @@ class ModelCompiler:
         qc_path = Path(model_data.get("qc")).resolve()
         if not qc_path.exists():
             model_logger.error(f"QC file not found: {qc_path}")
-            return
+            return False  
         
         game_dir = self.gameinfo_dir
         if self.args.game:
@@ -310,7 +310,7 @@ class ModelCompiler:
         
         if not success:
             model_logger.error("Main QC compilation failed.")
-            return
+            return False   
         
         dumped_materials = set(dumped_materials)
         model_logger.info(f"Compiled {qc_path.name} ({len(dumped_materials)} materials)")
@@ -326,10 +326,12 @@ class ModelCompiler:
         )
         
         if self.args.game:
-            return
+            return True
         
         self._process_materials(qc_path, dumped_materials, output_dir, compile_root, model_logger)
         self._process_subdata(model_data, output_dir, compile_root)
+
+        return True 
     
     def _process_qc(self, qc_path: Path, logger: Logger, base_name: str, variables: dict = None, include_dirs: list = None) -> Path:
         temp_qc_name = f"temp_{base_name}.qc"
@@ -483,14 +485,14 @@ class ValveModelPipeline:
         else:
             self.logger.warn("No gameinfo provided. Shared materials and material collection will be limited.")
 
-        compile_root = Path(self.args.exportdir).resolve()
+        compile_root = Path(self.args.exportdir.strip('"')).resolve()
 
         if self.args.exportdir is None:
             self.logger.warn(f"--exportdir not provided, using default: {compile_root}")
 
         if self.args.single_addon:
-            addon_folder = self.config.get("addonroot", "").strip()
-            if not addon_folder:
+            addon_folder = self.config.get("addonroot", "").strip().strip('"')
+            if not self.args.game and not addon_folder:
                 self.logger.error("--single-addon requires 'addonroot' to be defined and non-empty in config.")
                 return
             compile_root = compile_root / addon_folder
@@ -538,9 +540,12 @@ class ValveModelPipeline:
         only_filter = [e.lower() for e in self.args.only] if self.args.only else None
 
         for model_name, model_data in self.config.get("model", {}).items():
+            self.logger.root.model_total += 1 
             if only_filter and model_name.lower() not in only_filter:
                 continue
-            compiler.compile_model(model_name, model_data, compile_root, global_vars=global_define_vars)
+            success = compiler.compile_model(model_name, model_data, compile_root, global_vars=global_define_vars)
+            if success:
+                self.logger.root.model_compiled += 1
     
     def _process_material_sets(self, compile_root: Path, search_paths: List[Path]):
         for set_name, set_data in self.config.get("material", {}).items():
@@ -552,10 +557,14 @@ class ValveModelPipeline:
         only_filter = [e.lower() for e in self.args.only] if self.args.only else None
 
         for folder_name, items in self.config.get("data", {}).items():
+            self.logger.root.data_total += 1  
+
             if only_filter and folder_name.lower() not in only_filter:
                 continue
+            
             output_dir = compile_root if self.args.single_addon else compile_root / folder_name
             processor.process_items(items, output_dir)
+            self.logger.root.data_compiled += 1
     
     def _package_archives(self, compile_root: Path, packager_exe: Optional[Path]):
         if not packager_exe:

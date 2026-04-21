@@ -4,7 +4,7 @@ from datetime import datetime
 from functools import wraps
 from typing import List, Optional
 
-SOFTVERSION = 3.0
+SOFTVERSION = 3.1
 SOFTBUILD = 0
 
 SUPPORTED_TEXT_FORMAT = (
@@ -26,6 +26,7 @@ TEXTURE_KEYS = {
     "$iris", "$mraotexture", "$paintsplatnormalmap", "$paintsplatbubblelayout",
     "$paintsplatbubble", "$paintenvmap", "$emissiontexture", "$emissiontexture2",
 }
+
 
 class Logger:
     LEVELS = {"INFO": 1, "WARN": 2, "ERROR": 3, "DEBUG": 4}
@@ -61,6 +62,11 @@ class Logger:
             self.warn_count = 0
             self.error_count = 0
             self.root = self
+
+            self.model_compiled = 0
+            self.model_total    = 0
+            self.data_compiled  = 0
+            self.data_total     = 0
 
         self.context = context.upper() if context else None
         self.context_label = self.context
@@ -166,6 +172,7 @@ class PathResolver:
             return root
         return config_path.parent
 
+
 def timer(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
@@ -178,6 +185,10 @@ def timer(func):
             if logger:
                 logger.info('')
                 logger.info("-" * 54)
+                if logger.model_total > 0 or logger.data_total > 0:
+                    logger.info(f"  {logger.model_compiled}/{logger.model_total} Models Compiled")
+                    logger.info(f"  {logger.data_compiled}/{logger.data_total} Data Compiled")
+                    logger.info('')
                 if logger.warn_count > 0 or logger.error_count > 0:
                     logger.info(f"Build finished with {logger.error_count} errors and {logger.warn_count} warnings.")
                 logger.info(f"Total time elapsed: {elapsed:.2f} seconds")
