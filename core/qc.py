@@ -409,6 +409,8 @@ class QCProcessor:
         if depth > 0:
             inner_lines, i = self._collect_block(all_lines, i, depth, base_dir)
             for bl in inner_lines:
+                if bl.strip().startswith("//"):
+                    continue
                 for tok in self._parse_command(bl.strip()):
                     if tok != "}":
                         tokens.append(tok.strip('"'))
@@ -1052,7 +1054,10 @@ class QCProcessor:
                 if depth > 0:
                     inner_lines, i = self._collect_block(all_lines, i, depth, base_dir)
                     for bl in inner_lines:
-                        toks = self._parse_command(bl.strip())
+                        stripped_bl = bl.strip()
+                        if stripped_bl.startswith("//"):
+                            continue
+                        toks = self._parse_command(stripped_bl)
                         if toks and toks[0].lower() in ("suffix", "prefix") and len(toks) >= 2:
                             variants.append((toks[0].lower(), toks[1].strip('"')))
                         else:
