@@ -9,22 +9,21 @@ class Archiver:
     """Handles cleanup and compressed archiving of the compile directory."""
 
     @staticmethod
-    def clean(compile_root: Path, logger: Logger, archived: bool = False):
+    def clean(compile_root: Path, logger: Logger, archived: bool = False, archive_root: Path = None):
         os_logger = logger.with_context("OS")
-        
+
         if not compile_root.exists() or not any(compile_root.iterdir()):
             os_logger.info("No existing compile folder to clean.")
             return
-        
+
         if archived:
-            Archiver._archive(compile_root, os_logger)
+            Archiver._archive(compile_root, os_logger, archive_root=archive_root or compile_root)
         else:
             Archiver._trash(compile_root, os_logger)
 
     @staticmethod
-    def _archive(compile_root: Path, logger: Logger):
+    def _archive(compile_root: Path, logger: Logger, archive_root: Path = None):
         try:
-            # 1. Clear any .vpk or .gma files within the compiled folder first
             logger.info("Clearing package files (.vpk, .gma) before archiving...")
             for item in compile_root.rglob("*"):
                 if item.is_file() and item.suffix.lower() in (".vpk", ".gma"):
@@ -34,7 +33,7 @@ class Archiver:
                     except Exception as e:
                         logger.warn(f"Could not remove {item.name}: {e}")
 
-            archive_dir = compile_root.parent / "_archive"
+            archive_dir = (archive_root or compile_root).parent / "_archive"
             archive_dir.mkdir(exist_ok=True)
             
             timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
@@ -46,7 +45,6 @@ class Archiver:
                     if file.is_file():
                         zipf.write(file, file.relative_to(compile_root))
             
-            # 5. Delete the original folder after successful compression
             shutil.rmtree(compile_root)
             compile_root.mkdir(parents=True, exist_ok=True)
             

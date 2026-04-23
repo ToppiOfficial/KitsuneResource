@@ -27,22 +27,9 @@ def _ensure_model_output_dir(studiomdl_exe: Path, qc_file: Path, game_dir: Path 
     log.debug(f"Pre-created model output dir: {target}")
 
 
-def model_compile_studiomdl(studiomdl_exe: str | Path, qc_file: str | Path, output_dir: str | Path = None, game_dir: str | Path = None,
+def model_compile_studiomdl(studiomdl_exe: str | Path, qc_file: str | Path, output_dir: str | Path = None,
+                            game_dir: str | Path = None, vproject_dir: str | Path = None,
                             verbose: bool = False, logger: Logger = None) -> tuple[bool, list[Path], list[str]]:
-    """
-    Compile a Source model using studiomdl.exe and return compiled files and materials.
-
-    Args:
-        studiomdl_exe: Path to studiomdl.exe
-        qc_file: QC file to compile
-        output_dir: Folder where compiled files should be moved
-        game_dir: Optional game directory (passed to studiomdl)
-        verbose: Whether to print full compiler stdout
-        logger: Optional Logger instance
-
-    Returns:
-        Tuple of (success, moved_files, materials)
-    """
     studiomdl_exe = Path(studiomdl_exe).resolve()
     qc_file = Path(qc_file).resolve()
     output_dir = Path(output_dir).resolve() if output_dir else None
@@ -53,12 +40,14 @@ def model_compile_studiomdl(studiomdl_exe: str | Path, qc_file: str | Path, outp
     log = logger or Logger(verbose=verbose)
 
     cmd = [str(studiomdl_exe), "-nop4", "-verbose", "-dumpmaterials"]
-    if game_dir:
-        cmd += ["-game", str(Path(game_dir).resolve())]
+    if vproject_dir:
+        cmd += ["-game", str(Path(vproject_dir).resolve())]
     cmd.append(str(qc_file))
 
+    log.info(f"studiomdl args: {' '.join(cmd[1:])}")
+
     # ffs
-    _ensure_model_output_dir(studiomdl_exe, qc_file, Path(game_dir) if game_dir else None, log)
+    _ensure_model_output_dir(studiomdl_exe, qc_file, Path(vproject_dir) if vproject_dir else (Path(game_dir) if game_dir else None), log)
 
     try:
         result = subprocess.run(
@@ -162,7 +151,10 @@ def _move_compiled_files(stdout: str, output_dir: Path | None, log: Logger) -> l
                 shutil.move(str(src_path), str(dest_path))
                 moved_files.append(dest_path)
                 cleaned_dirs.add(src_path.parent)
-                log.debug(f"Moved: {src_path} -> {dest_path}")
+                if src_path.suffix.lower() == ".mdl":
+                    log.info(f"Model output: {dest_path}")
+                else:
+                    log.debug(f"Moved: {src_path.name} -> {dest_path}")
 
     _cleanup_empty_dirs(cleaned_dirs, log)
     return moved_files

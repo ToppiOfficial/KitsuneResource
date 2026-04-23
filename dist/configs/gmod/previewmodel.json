@@ -3,7 +3,7 @@
     "studiomdl": "C:/Program Files (x86)/Steam/steamapps/common/SourceFilmmaker/game/bin/studiomdl.exe",
     "gameinfo": "D:/Program Files/Steam/steamapps/common/GarrysMod/garrysmod/gameinfo.txt",
     "includedirs": [
-        "D:/Development/game-mods/garrysmod/player/.modules/v1.0/shared_prefabs/"
+        "D:/Development/game-mods/garrysmod/player/.modules/v1.0/_shared_prefabs/"
     ],
     "definevariable": {
         "modelFilePath0": "previewmodel",

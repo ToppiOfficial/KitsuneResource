@@ -1,24 +1,26 @@
 # KitsuneResource
 
-A Python-based pipeline for compiling and packaging Source Engine resources (models, materials, textures, scripts). Designed for games like **Left 4 Dead 2** and **Garry's Mod**, this tool automates compilation, material processing, texture conversion, and optional packaging.
+KitsuneResource is a Python-based pipeline for compiling and packaging Source Engine resources, including models, materials, textures, and scripts. It is designed to automate compilation, material processing, texture conversion, and packaging for titles such as Left 4 Dead 2 and Garry's Mod.
 
-<img width="1502" height="943" alt="Screenshot 2026-01-06 023140" src="https://github.com/user-attachments/assets/8f1f81c2-5143-478e-bf5d-4af4ab26d453" />
 
 ## Compatibility
 
-Windows 10+ or Linux with Wine 9.0 for the executables & Python 3.10+
+- Operating System: Windows 10+ or Linux (via Wine 9.0 for Windows executables)
+- Python: Version 3.10 or newer
+
+## Dependencies
+
+The following tools must be available in your system path or specified in your configuration file:
+- `studiomdl.exe` (Provided with the Source SDK or the `bin/` directory of a Source game)
+- `vtfcmd.exe` (Provided by [VTFLib](https://github.com/NeilJed/VTFLib))
+- `vpk.exe` or `gmad.exe` (Provided in the `bin/` directory of a Source game)
 
 ## Installation
 
-1. **Prerequisites:**
-   - Python 3.10+
-   - `studiomdl.exe` (from Source SDK or any Source game's `bin/` folder)
-   - `vtfcmd.exe` ([VTFLib](https://github.com/NeilJed/VTFLib))
-   - `vpk.exe or gmad.exe` (from any Source game's `bin/` folder)
+Clone the repository and install the required dependencies:
 
-2. **Clone and Install:**
 ```bash
-git clone https://github.com/yourusername/KitsuneResource.git
+git clone [https://github.com/yourusername/KitsuneResource.git](https://github.com/yourusername/KitsuneResource.git)
 cd KitsuneResource
 pip install -r requirements.txt
 python build.py
@@ -26,47 +28,46 @@ python build.py
 
 ## Usage
 
-### Basic Command
+KitsuneResource accepts one or more configuration JSON files or direct `.qc` files via the command line.
+
 ```cmd
-python main.py [options] path/to/config.json or kitsuneresource.exe [options] path/to/config.json
+python main.py [options] <config.json>|<model.qc> ...
+kitsuneresource.exe [options] <config.json>|<model.qc> ...
 ```
 
 ## Command-Line Arguments
 
 ### Global Options
+
 | Argument | Description |
-|----------|-------------|
-| `CONFIG_JSON` | **(Required)** Path to JSON configuration file |
-| `--basedir <path>` | Absolute path to override the input/output root directory. |
-| `--log` | Enable logging to a timestamped file in the `kitsune_log/` directory. |
-| `--verbose` | Enable verbose output for debugging purposes. |
+| --- | --- |
+| `INPUT_FILE(S)` | **(Required)** One or more paths to `.json` configuration files or `.qc` files. |
+| `--only <entry>` | Only compile the specified model or data entry (case-insensitive). Can be specified multiple times. |
+| `--log` | Enable logging. Output is written to a timestamped file in the `.resource-log/` directory. |
+| `--verbose` | Enable verbose terminal output. |
 
 ### ValveModel Pipeline Options
+
 | Argument | Description |
-|----------|-------------|
-| `--exportdir <dir>` | Root folder for the compiled output. Defaults to `ExportedResource`. |
-| `--game [path]` | Compile models directly into the game directory, skipping material/data processing and VPK packaging. Can optionally take a path to a directory containing `gameinfo.txt` to override the config. |
-| `--mat-mode <0,1,2>` | **0**: Skip all material processing. **1**: Copy materials locally to the model's folder (`raw-local`). **2**: Copy materials to a shared folder (default). |
-| `--no-mat-local` | When using `--mat-mode 2`, this disables the localization of material paths in VMT files. |
-| `--package-files` | Package each compiled subfolder into a separate VPK archive. (Formerly `--vpk`) |
-| `--archive-old-ver` | Archive the existing compile folder with a timestamp before starting, instead of sending it to the Recycle Bin. (Formerly `--archive`) |
-| `--qc-mode <1,2>` | **1**: Use the original QC file directly. **2**: Generate a flattened QC file that includes all sub-models and variables (default). |
-| `--keep-flat-qc` | Prevents the deletion of the temporary flattened QC files after compilation. |
-| `--single-addon` | Compile all output into a single addon folder defined by 'addonroot' in config. |
+| --- | --- |
+| `--exportdir <dir>` | Root directory for compiled output. Defaults to the base name of the configuration file. |
+| `--game [path]` | Compile models directly into the game directory, skipping material/data processing and packaging. An optional path containing `gameinfo.txt` can be provided to override the configuration. |
+| `--no-vproject` | Prevent passing the gameinfo directory to `studiomdl`. |
+| `--mat-mode <0 1 2>` | Set material processing behavior. `0`: Skip processing. `1`: Copy materials locally to the model's folder (`raw-local`). `2`: Copy materials to a shared directory (default). |
+| `--no-mat-local` | Disable the localization of material paths in VMT files when using `--mat-mode 2`. |
+| `--package-files` | Package each compiled subfolder into a separate VPK or GMA archive. |
+| `--archive-old-ver` | Archive the existing compile folder with a timestamp before starting instead of overwriting. |
+| `--single-addon` | Compile all output into a single addon directory defined by the `addonroot` parameter in the configuration. |
 
 ### ValveTexture Pipeline Options
+
 | Argument | Description |
-|----------|-------------|
-| `--forceupdate` | Force reprocessing of all textures, even if they appear to be up-to-date. |
-| `--allow_reprocess` | Allow the same source file to be processed multiple times in a single run. |
-| `--recursive` | Search for input texture files recursively through all subfolders. |
-
-## Known Issues
-
-- $definevariable and similar gets passed down to submodels incorrectly causing "defined" yet empty value for flatten qc mode (Workaround: Use definevariable in JSON for values getting passed along to every QC or used unique naming for submodels)
+| --- | --- |
+| `--forceupdate` | Force reprocessing of all textures, ignoring the signature cache. |
+| `--allow_reprocess` | Allow a single source file to be processed multiple times during the same execution. |
+| `--recursive` | Traverse subdirectories recursively when searching for input texture files. |
 
 ## Acknowledgments
 
-- Valve Software for Source Engine and SDK tools
-- VTFLib developers for texture conversion tools
-- Source modding community
+- Valve Software for the Source Engine and SDK tools
+- NeilJed and the VTFLib developers for texture conversion tools

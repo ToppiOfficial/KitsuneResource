@@ -2,108 +2,9 @@ from pathlib import Path
 from core import bone_animations
 import shlex
 
-def _parse_driverbone_block(lines: list[str], start: int) -> tuple[dict | None, int]:
-    result = {"pose": None, "triggers": [], "target_bones": []}
-    i = start - 1
-
-    while i < len(lines) and "{" not in lines[i]:
-        i += 1
-    if i >= len(lines):
-        return None, i
-
-    i += 1  # skip '{' line
-
-    while i < len(lines):
-        line = lines[i].strip()
-        i += 1
-
-        if line == "}":
-            break
-        if not line or line.startswith("//"):
-            continue
-
-        tokens = shlex.split(line)
-        if not tokens:
-            continue
-
-        if tokens[0].lower() == "pose":
-            result["pose"] = tokens[1]
-            continue
-
-        # Process tokens left-to-right; 'trigger' keyword is just a separator
-        j = 0
-        while j < len(tokens):
-            tok = tokens[j]
-            if tok.lower() == "trigger":
-                j += 1
-                continue
-            # Try to parse as a trigger pair: float int
-            if j + 1 < len(tokens):
-                try:
-                    angle = float(tok)
-                    frame = int(tokens[j + 1])
-                    result["triggers"].append((angle, frame))
-                    j += 2
-                    continue
-                except ValueError:
-                    pass
-            # Otherwise treat as a bone name
-            result["target_bones"].append(tok.strip('"'))
-            j += 1
-
-    return result, i
 
 def _strip_prefix(bone_name: str) -> str:
     return bone_name.split('.')[-1]
-
-
-def _parse_driverlookatbone_block(lines: list[str], start: int) -> tuple[dict | None, int]:
-    result = {"pose": None, "frame": 0, "aimvector": (0.0, 0.0, 0.0), "upvector": (0.0, 0.0, 0.0), "location": (0.0, 0.0, 0.0), "rotation": (0.0, 0.0, 0.0), "helper_bones": []}
-    i = start - 1
-
-    while i < len(lines) and "{" not in lines[i]:
-        i += 1
-    if i >= len(lines):
-        return None, i
-
-    i += 1
-
-    while i < len(lines):
-        line = lines[i].strip()
-        i += 1
-
-        if line == "}":
-            break
-        if not line or line.startswith("//"):
-            continue
-
-        tokens = shlex.split(line)
-        if not tokens:
-            continue
-
-        keyword = tokens[0].lower()
-
-        if keyword == "pose" and len(tokens) >= 2:
-            result["pose"] = tokens[1]
-        elif keyword == "frame" and len(tokens) >= 2:
-            result["frame"] = int(tokens[1])
-        elif keyword == "aimvector" and len(tokens) >= 4:
-            result["aimvector"] = (float(tokens[1]), float(tokens[2]), float(tokens[3]))
-        elif keyword == "upvector" and len(tokens) >= 4:
-            result["upvector"] = (float(tokens[1]), float(tokens[2]), float(tokens[3]))
-        elif keyword == "posoffset" and len(tokens) >= 4:
-            result["location"] = (float(tokens[1]), float(tokens[2]), float(tokens[3]))
-        elif keyword == "rotoffset" and len(tokens) >= 4:
-            result["rotation"] = (float(tokens[1]), float(tokens[2]), float(tokens[3]))
-        elif keyword == "location" and len(tokens) >= 4:
-            result["location"] = (float(tokens[1]), float(tokens[2]), float(tokens[3]))
-        elif keyword == "rotation" and len(tokens) >= 4:
-            result["rotation"] = (float(tokens[1]), float(tokens[2]), float(tokens[3]))
-        else:
-            for tok in tokens:
-                result["helper_bones"].append(tok.strip('"'))
-
-    return result, i
 
 
 def generate_lookat_vrd(target_bone: str, attachment_name: str, frame_index: int, aimvector: tuple,
@@ -140,8 +41,8 @@ def generate_lookat_vrd(target_bone: str, attachment_name: str, frame_index: int
     if frame_index >= len(euler_frames):
         frame_index = len(euler_frames) - 1
 
-    hierarchy  = {bt.bone_name.lower(): bt for bt in euler_frames[0]}
-    frame_map  = {bt.bone_name.lower(): bt for bt in euler_frames[frame_index]}
+    hierarchy = {bt.bone_name.lower(): bt for bt in euler_frames[0]}
+    frame_map = {bt.bone_name.lower(): bt for bt in euler_frames[frame_index]}
     av = " ".join(f"{v:.6g}" for v in aimvector)
     uv = " ".join(f"{v:.6g}" for v in upvector)
 
@@ -155,10 +56,10 @@ def generate_lookat_vrd(target_bone: str, attachment_name: str, frame_index: int
             if logger: logger.error(f"Helper '{helper_bone}' not found, skipping")
             continue
 
-        hp   = helper_ref.parent_name if helper_ref.parent_name else helper_bone
-        h_bt = frame_map.get(h_key)
+        hp    = helper_ref.parent_name if helper_ref.parent_name else helper_bone
+        h_bt  = frame_map.get(h_key)
         h_loc = h_bt.location if h_bt else (0.0, 0.0, 0.0)
-        hl = " ".join(f"{v:.9f}" for v in h_loc)
+        hl    = " ".join(f"{v:.9f}" for v in h_loc)
 
         vrd_lines.append(f"<aimconstraint>\t{_strip_prefix(helper_bone)}\t\t{_strip_prefix(hp)}\t{attachment_name}")
         vrd_lines.append(f"<basepos>       {hl}")
@@ -166,7 +67,7 @@ def generate_lookat_vrd(target_bone: str, attachment_name: str, frame_index: int
         vrd_lines.append(f"<upvector>\t\t{uv}")
         vrd_lines.append("")
 
-    out_dir = vrd_dir / "vrds"
+    out_dir  = vrd_dir / "vrds"
     out_dir.mkdir(exist_ok=True)
     vrd_path = out_dir / f"{vrd_name}.vrd"
     vrd_path.write_text("\n".join(vrd_lines), encoding="utf-8")
@@ -180,7 +81,6 @@ def generate_vrd(driver_bone: str, pose_path: str, triggers: list[tuple[float, i
                  scale: float = 1.0, logger=None) -> Path:
 
     pose_file = (pose_dir / pose_path).resolve()
-
     ext = pose_file.suffix.lower()
     if not ext:
         for candidate_ext in (".dmx", ".smd"):
@@ -207,7 +107,7 @@ def generate_vrd(driver_bone: str, pose_path: str, triggers: list[tuple[float, i
         euler_frames = bone_animations.apply_world_scale(euler_frames, scale)
 
     hierarchy = {bt.bone_name.lower(): bt for bt in euler_frames[0]}
-    d_key = driver_bone.lower()
+    d_key     = driver_bone.lower()
     driver_ref = hierarchy.get(d_key)
 
     if not driver_ref:
@@ -216,15 +116,13 @@ def generate_vrd(driver_bone: str, pose_path: str, triggers: list[tuple[float, i
     vrd_lines = []
 
     for helper_bone in target_bones:
-        h_key = helper_bone.lower()
+        h_key      = helper_bone.lower()
         helper_ref = hierarchy.get(h_key)
 
         if not helper_ref:
             if logger: logger.error(f"Helper '{helper_bone}' not found, skipping")
             continue
 
-        # hp: Helper Parent | dp: Driver Parent
-        # We MUST pull dp from the driver_ref to ensure it matches the side
         hp = helper_ref.parent_name if helper_ref.parent_name else helper_bone
         dp = (driver_ref.parent_name if driver_ref else None) or driver_bone
 
@@ -253,7 +151,7 @@ def generate_vrd(driver_bone: str, pose_path: str, triggers: list[tuple[float, i
 
         vrd_lines.append("")
 
-    out_dir = vrd_dir / "vrds"
+    out_dir  = vrd_dir / "vrds"
     out_dir.mkdir(exist_ok=True)
     vrd_path = out_dir / f"{vrd_name}.vrd"
     vrd_path.write_text("\n".join(vrd_lines), encoding="utf-8")

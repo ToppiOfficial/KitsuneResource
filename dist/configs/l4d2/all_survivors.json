@@ -2,6 +2,7 @@
     "header": "ValveModel",
     "studiomdl": "D:/Portable Program Files/nekomdl/nekomdl.exe",
     "gameinfo": "D:/Program Files/Steam/steamapps/common/Left 4 Dead 2/left4dead2/gameinfo.txt",
+    "moddir": "D:/Program Files/Steam/steamapps/common/Left 4 Dead 2/left4dead2_workshop",
     "vtfcmd": "D:/Portable Program Files/vtfreloaded/VTFCmd.exe",
     "packager": "D:/Program Files/Steam/steamapps/common/Left 4 Dead 2/bin/vpk.exe",
     "definevariable": {
@@ -10,9 +11,9 @@
     },
     "addonroot" : "allsurvivors",
     "includedirs": [
-        "D:/Development/game-mods/left4dead2/survivors/.modules/v3.0/shared_prefabs/",
-        "D:/Development/game-mods/left4dead2/survivors/.modules/v3.0/shared_prefabs/animationlist_animswap/",
-        "D:/Development/game-mods/left4dead2/survivors/.modules/v3.0/shared_prefabs/animationlist_animlight/"
+        "D:/Development/game-mods/left4dead2/survivors/.modules/v3.0/_shared_prefabs/",
+        "D:/Development/game-mods/left4dead2/survivors/.modules/v3.0/_shared_prefabs/animationlist_animswap/",
+        "D:/Development/game-mods/left4dead2/survivors/.modules/v3.0/_shared_prefabs/animationlist_animlight/"
     ],
     "model": {
         "Bill": {

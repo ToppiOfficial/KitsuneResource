@@ -151,7 +151,8 @@ class DataProcessor:
 
 class ModelCompiler:
     def __init__(self, studiomdl_exe: Path, search_paths: List[Path],  vtfcmd_exe: Optional[Path], 
-                 gameinfo_dir: Optional[Path], args, logger: Logger, global_includedirs: list = None):
+                 gameinfo_dir: Optional[Path], args, logger: Logger, global_includedirs: list = None,
+                 moddir: Optional[Path] = None, vprojectdir: Optional[Path] = None):
         self.studiomdl_exe = studiomdl_exe
         self.search_paths = search_paths
         self.vtfcmd_exe = vtfcmd_exe
@@ -160,6 +161,8 @@ class ModelCompiler:
         self.logger = logger
         self._vpk_cache = GameVPKCache(gameinfo_dir, search_paths) if gameinfo_dir else None
         self.global_includedirs = global_includedirs if global_includedirs is not None else []
+        self.moddir = moddir
+        self.vprojectdir = vprojectdir
     
     def _parse_model_defines(self, model_define_vars: dict) -> tuple[dict, dict]:
         regular_model_defines = {}
@@ -196,6 +199,7 @@ class ModelCompiler:
                 qc_file=temp_qc,
                 output_dir=output_dir,
                 game_dir=game_dir,
+                vproject_dir=None if getattr(self.args, 'no_vproject', False) else (self.vprojectdir or game_dir),
                 verbose=self.args.verbose,
                 logger=logger,
             )
@@ -225,10 +229,15 @@ class ModelCompiler:
         
         game_dir = self.gameinfo_dir
         if self.args.game:
-            if not game_dir:
-                model_logger.error("--game mode requires a valid 'gameinfo' path in your config.")
+            if not game_dir and not self.vprojectdir:
+                model_logger.error("--game mode requires either 'gameinfo' or 'vprojectdir' to be defined in config.")
                 return
-            output_dir = None
+            if self.moddir:
+                output_dir = self.moddir
+            elif getattr(self.args, 'no_vproject', False):
+                output_dir = game_dir
+            else:
+                output_dir = None
             model_logger.info(f"Compiling model {qc_path.name} directly to game directory")
         else:
             output_dir = compile_root if getattr(self.args, 'single_addon', False) else compile_root / model_name
@@ -433,6 +442,7 @@ class ValveModelPipeline:
             self.logger.warn("No gameinfo provided. Shared materials and material collection will be limited.")
 
         compile_root = Path(self.args.exportdir.strip('"')).resolve()
+        base_compile_root = compile_root
 
         if self.args.exportdir is None:
             self.logger.warn(f"--exportdir not provided, using default: {compile_root}")
@@ -452,7 +462,7 @@ class ValveModelPipeline:
                 self.logger.info(f"Game directory: {gameinfo_dir}")
             self.logger.info("Materials, data sections, and Packaging will be skipped")
         else:
-            Archiver.clean(compile_root, self.logger, self.args.archive_old_ver)
+            Archiver.clean(compile_root, self.logger, self.args.archive_old_ver, archive_root=base_compile_root)
         
         if search_paths:
             self.logger.info("")
@@ -481,8 +491,14 @@ class ValveModelPipeline:
         global_includedirs = self.config.get("includedirs", [])
         global_define_vars = self.config.get("definevariable", {})
 
+        moddir_val = self.config.get("moddir")
+        moddir = Path(moddir_val).resolve() if moddir_val else None
+
+        vprojectdir_val = self.config.get("vprojectdir")
+        vprojectdir = Path(vprojectdir_val).resolve() if vprojectdir_val else None
+
         compiler = ModelCompiler(studiomdl_exe, search_paths, vtfcmd_exe, gameinfo_dir, self.args, self.logger,
-                                 global_includedirs=global_includedirs)
+                                 global_includedirs=global_includedirs, moddir=moddir, vprojectdir=vprojectdir)
 
         only_filter = [e.lower() for e in self.args.only] if self.args.only else None
 
@@ -699,6 +715,8 @@ def main():
                          help="Root folder for compiled output. Defaults to each config's filename as folder name.")
     model_group.add_argument("--game", nargs='?', const=True, default=False,
                          help="Compile models directly to game directory. Optionally provide a path to a directory with gameinfo.txt to override config.")
+    model_group.add_argument("--no-vproject", action="store_true",
+                         help="Do not pass the gameinfo directory to studiomdl via -game flag.")
     model_group.add_argument("--mat-mode", type=int, default=2, choices=[0,1,2],
                          help="Material mode: 0=skip, 1=raw-local, 2=shared (default).")
     model_group.add_argument("--no-mat-local", action="store_true",
