@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Optional
 from utils import Logger
 from core import vrd as vrd_module
-from core import flex_controllers
+from core import flex_controllers, datamodel
 from core.bone_animations import read_dmx_bone_animation, frames_quat_to_euler, frames_rotation_to_degrees, read_smd_bone_animation, apply_world_scale
 
 ORANGE = "\033[38;5;208m"
@@ -859,6 +859,64 @@ class QCProcessor:
                     block_lines.extend(inner_lines)
                 block_content = "".join(block_lines)
 
+                has_noautodmxrules = "noautodmxrules" in block_content.lower()
+                sub_parts = self._parse_command(line.strip())
+
+                if len(sub_parts) >= 3:
+                    mesh_raw = sub_parts[2].strip('"')
+                    is_dmx = mesh_raw.lower().endswith(".dmx")
+                    is_smd = mesh_raw.lower().endswith(".smd")
+                    
+                    final_mesh_path = mesh_raw
+                    dmx_path = self._resolve_dmx_path(mesh_raw, base_dir)
+
+                    # noautodmxrules: 
+                    # This qc parameter doesn't seem to not exist in old engine branches such as 
+                    # TF2's (still doesn't even after the hl2 anniv update), it only exist in later engine branches.
+                    # (maybe after L4D? valid in Source Film Maker upto CSGO[Legacy]).
+                    #
+                    # NOTE: The documentation states only Flexcontrollers, what about Flexrules or DominationRule?
+                    # TODO: Create a method that checks what engine branch then only run this block if the engine branch
+                    # is tf2 version below.
+                    if has_noautodmxrules and is_dmx and dmx_path:
+                        try:
+                            orig_enc, orig_ver = "keyvalues2", 1
+                            with open(dmx_path, 'rb') as f:
+                                header_bytes = b""
+                                while not header_bytes.endswith(b">"):
+                                    char = f.read(1)
+                                    if not char: break
+                                    header_bytes += char
+                                header_str = header_bytes.decode('ascii', errors='ignore')
+
+                            matches = re.findall(datamodel.header_format_regex, header_str)
+                            if matches:
+                                orig_enc, orig_ver = matches[0][0], int(matches[0][1])
+                            else:
+                                # Check against proto2 format
+                                matches = re.findall(datamodel.header_proto2_regex, header_str)
+                                if matches:
+                                    orig_enc, orig_ver = "binary_proto", int(matches[0][0])
+
+                            dm = datamodel.load(dmx_path)
+                            temp_path = dmx_path.with_name(f"{dmx_path.stem}_norules.dmx")
+                            
+                            to_delete = [e for e in dm.elements if e.type == "DmeCombinationInputControl"]
+                            for e in to_delete:
+                                if self.logger: self.logger.info(f"noautodmxrules: Removing {e.type} '{e.name}'")
+                                dm.elements.remove(e)
+                                for parent in dm.elements:
+                                    for attr in parent.values():
+                                        if isinstance(attr, list) and e in attr:
+                                            attr.remove(e)
+
+                            dm.write(temp_path, orig_enc, orig_ver)
+                            final_mesh_path = (Path(mesh_raw).parent / temp_path.name).as_posix()
+
+                        except Exception as e:
+                            if self.logger: self.logger.error(f"Line {line_num}: noautodmxrules failed: {e}")
+
+                # Scaling
                 if self.current_scale != 1.0 and self.compiler != "nekomdl":
                     scaled_lines = []
                     for bl in block_content.splitlines(True):
@@ -884,20 +942,25 @@ class QCProcessor:
                         scaled_lines.append(bl)
                     block_content = "".join(scaled_lines)
 
-                sub_parts = self._parse_command(line.strip())
-                if len(sub_parts) >= 3 and sub_parts[2].lower().endswith(".dmx"):
-                    dmx_raw  = sub_parts[2].strip('"')
-                    dmx_path = self._resolve_dmx_path(dmx_raw, base_dir)
+                # Flex Controllers
+                if len(sub_parts) >= 3 and is_dmx:
                     if dmx_path:
-                        res_content, errs, count = flex_controllers.inject_flex_controllers_from_dmx(block_content, dmx_path)
+                        if has_noautodmxrules:
+                            clean_block = re.sub(r"(?i)[ \t]*noautodmxrules[ \t]*", "", block_content)
+
+                        res_content, errs, count = flex_controllers.inject_flex_controllers_from_dmx(clean_block, dmx_path)
+                        
+                        if final_mesh_path != mesh_raw:
+                            res_content = res_content.replace(f'"{mesh_raw}"', f'"{final_mesh_path}"', 1)
+
                         for err in errs:
                             output_lines.append(f"// ERROR Line {line_num}: {err}\n")
                         if count > 0 and self.logger:
                             self.logger.info(f"Constructed {count} flex controllers from {dmx_path.name}")
                         output_lines.append(res_content)
                     else:
-                        if self.logger: self.logger.warn(f"Line {line_num}: Could not resolve DMX '{dmx_raw}' for $model, flex controllers skipped")
-                        output_lines.append(f"// WARNING Line {line_num}: Could not resolve DMX '{dmx_raw}'\n")
+                        if self.logger: self.logger.warn(f"Line {line_num}: Could not resolve DMX '{mesh_raw}'")
+                        output_lines.append(f"// WARNING Line {line_num}: Could not resolve DMX '{mesh_raw}'\n")
                         output_lines.append(block_content)
                 else:
                     output_lines.append(block_content)

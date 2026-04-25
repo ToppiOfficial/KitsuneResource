@@ -1,23 +1,21 @@
-# KitsuneResource
+## INTRODUCTIONS
 
-KitsuneResource is a Python-based pipeline for compiling and packaging Source Engine resources, including models, materials, textures, and scripts. It is designed to automate compilation, material processing, texture conversion, and packaging for titles such as Left 4 Dead 2 and Garry's Mod.
+KitsuneResource is a Python-based software for compiling and packaging Source Engine assets, specifically models, materials, textures, and scripts. It is designed to automate compilation, material processing, texture conversion, and packaging addons for titles such as Left 4 Dead 2 and Garry's Mod.
 
 
-## Compatibility
+## COMPATIBILITY
 
 - Operating System: Windows 10+ or Linux (via Wine 9.0 for Windows executables)
 - Python: Version 3.10 or newer
 
-## Dependencies
+## DEPENDENCIES
 
 The following tools must be available in your system path or specified in your configuration file:
 - `studiomdl.exe` (Provided with the Source SDK or the `bin/` directory of a Source game)
 - `vtfcmd.exe` (Provided by [VTFLib](https://github.com/NeilJed/VTFLib))
 - `vpk.exe` or `gmad.exe` (Provided in the `bin/` directory of a Source game)
 
-## Installation
-
-Clone the repository and install the required dependencies:
+## BUILD
 
 ```bash
 git clone [https://github.com/yourusername/KitsuneResource.git](https://github.com/yourusername/KitsuneResource.git)
@@ -26,16 +24,14 @@ pip install -r requirements.txt
 python build.py
 ```
 
-## Usage
-
-KitsuneResource accepts one or more configuration JSON files or direct `.qc` files via the command line.
+## USAGE
 
 ```cmd
 python main.py [options] <config.json>|<model.qc> ...
 kitsuneresource.exe [options] <config.json>|<model.qc> ...
 ```
 
-## Command-Line Arguments
+## COMMAND-LINE ARGUMENTS
 
 ### Global Options
 
@@ -67,7 +63,7 @@ kitsuneresource.exe [options] <config.json>|<model.qc> ...
 | `--allow_reprocess` | Allow a single source file to be processed multiple times during the same execution. |
 | `--recursive` | Traverse subdirectories recursively when searching for input texture files. |
 
-## Acknowledgments
+## ACKNOWLEDGMENTS
 
 - Valve Software for the Source Engine and SDK tools
 - NeilJed and the VTFLib developers for texture conversion tools

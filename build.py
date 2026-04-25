@@ -1,6 +1,6 @@
 MAIN_SCRIPT = "main.py"
 EXE_NAME = "kitsuneresource"
-ICON_PATH = "icon.png"
+ICON_PATH = "images/appicon.psd"
 ONE_FILE = True
 
 UTILS_FILE = "utils.py"

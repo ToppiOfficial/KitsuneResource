@@ -1,27 +1,25 @@
-import sys, os, json
+import sys, os, json, copy
 from pathlib import Path
 import argparse, shutil, re
 from datetime import datetime
 from typing import List, Set, Optional
 
 from core.vpk import GameVPKCache
-from core.materials import (
-    export_vtf, copy_materials, map_materials_to_vmt
-)
+from core.materials import export_vtf, copy_materials, map_materials_to_vmt
 
 if not getattr(sys, 'frozen', False):
     def check_and_activate_venv():
         script_dir = Path(__file__).parent.resolve()
         venv_names = ['venv', '.venv', 'env', '.env']
-        
+
         for venv_name in venv_names:
             venv_path = script_dir / venv_name
-            
+
             if sys.platform == "win32":
                 python_exe = venv_path / "Scripts" / "python.exe"
             else:
                 python_exe = venv_path / "bin" / "python"
-            
+
             if venv_path.exists() and python_exe.exists():
                 if sys.executable != str(python_exe):
                     print(f"Found virtual environment: {venv_name}")
@@ -30,7 +28,7 @@ if not getattr(sys, 'frozen', False):
                 else:
                     print(f"Already running in virtual environment: {venv_name}")
                 return True
-        
+
         print("No virtual environment found, using global Python")
         return False
 
@@ -51,9 +49,34 @@ from core.texture_cache import TextureSignatureCache
 from core.qc import qc_read_materials, process_qc_file
 from core.vmt import VMTCreator
 
+
+# ---------------------------------------------------------------------------
+# Argument normalisation (moved out of main() so it can be tested/reused)
+# ---------------------------------------------------------------------------
+
+def _normalize_args(argv: list) -> list:
+    """Allow single-dash long options (e.g. -verbose) as an alias for --verbose."""
+    normalized = []
+    for arg in argv:
+        if arg.startswith('-') and not arg.startswith('--') and len(arg) > 2:
+            normalized.append('-' + arg)
+        else:
+            normalized.append(arg)
+    return normalized
+
+
+# ---------------------------------------------------------------------------
+# Pipeline registry — add new header types here without touching main()
+# ---------------------------------------------------------------------------
+
+PIPELINE_REGISTRY: dict = {}  # populated after class definitions below
+
+
+# ---------------------------------------------------------------------------
+
 class DataProcessor:
-    def __init__(self, compile_root: Path, vtfcmd_exe: Optional[Path], args, logger: Logger,
-             include_dirs: list = None):
+    def __init__(self, compile_root: Path, vtfcmd_exe: Optional[Path], args,
+                 logger: Logger, include_dirs: list = None):
         self.compile_root = compile_root
         self.vtfcmd_exe = vtfcmd_exe
         self.args = args
@@ -64,37 +87,44 @@ class DataProcessor:
             self._handle_vtf_export,
             self._handle_image_conversion,
         ]
-    
+
     def process_items(self, items: list, base_output: Path):
         for item in items:
             try:
                 self._process_single_item(item, base_output)
             except Exception as e:
                 self.logger.error(f"Failed to process item: {e}")
-    
+
     def _process_single_item(self, item: dict, base_output: Path):
-        input_path = resolve_json_path(item.get("input"), Path(self.args.config_path), self.args.basedir)
-        output_path = base_output / Path(item.get("output"))
+        input_raw = item.get("input")
+        output_raw = item.get("output")
+        if not input_raw or not output_raw:
+            self.logger.error(f"Item is missing 'input' or 'output' key: {item}")
+            return
+
+        input_str = input_raw.strip()
+        output_str = output_raw.strip()
+
+        input_path = resolve_json_path(input_str, Path(self.args.config_path), self.args.basedir)
+        output_path = base_output / Path(output_str)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        input_str = item.get("input").strip()
-        output_str = item.get("output").strip()
 
         for handler in self.handlers:
             if handler(item, input_path, output_path, input_str, output_str):
                 return
-        
+
         self._copy_file(input_path, output_path)
-    
-    def _handle_text_replacement(self, item: dict, input_path: Path, output_path: Path, input_str: str, output_str: str) -> bool:
-        if not (input_str.endswith(SUPPORTED_TEXT_FORMAT) and 
+
+    def _handle_text_replacement(self, item: dict, input_path: Path, output_path: Path,
+                                  input_str: str, output_str: str) -> bool:
+        if not (input_str.endswith(SUPPORTED_TEXT_FORMAT) and
                 output_str.endswith(SUPPORTED_TEXT_FORMAT)):
             return False
-        
+
         replace_map = item.get("replace")
         if not replace_map:
             return False
-        
+
         try:
             text = input_path.read_text(encoding="utf-8")
             for k, v in replace_map.items():
@@ -105,15 +135,18 @@ class DataProcessor:
         except Exception as e:
             self.logger.error(f"Failed string replace: {input_path} -> {output_path} | {e}")
             return True
-    
-    def _handle_vtf_export(self, item: dict, input_path: Path, output_path: Path, input_str: str, output_str: str) -> bool:
-        if not ((input_str.endswith(SUPPORTED_IMAGE_FORMAT) or input_str.endswith('.vtf')) 
+
+    def _handle_vtf_export(self, item: dict, input_path: Path, output_path: Path,
+                            input_str: str, output_str: str) -> bool:
+        if not ((input_str.endswith(SUPPORTED_IMAGE_FORMAT) or input_str.endswith('.vtf'))
                 and output_str.endswith(".vtf")):
             return False
-        
+
         vtf_data = item.get("vtf")
-        
-        if not input_str.endswith(".vtf") and self.vtfcmd_exe:
+
+        if input_str.endswith(".vtf"):
+            self._copy_file(input_path, output_path)
+        elif self.vtfcmd_exe:
             try:
                 export_vtf(
                     src_path=input_path,
@@ -121,22 +154,25 @@ class DataProcessor:
                     vtfcmd=self.vtfcmd_exe,
                     flags=vtf_data.get("flags", []) if vtf_data else [],
                     extra_args=vtf_data.get("encoder_args", []) if vtf_data else [],
-                    silent=True
+                    silent=True,
                 )
                 self.logger.info(f"VTF export: {input_path.name} -> {output_path.name}")
-            
             except Exception as e:
                 self.logger.error(f"Failed to export VTF: {input_path} -> {output_path} | {e}")
-        
+
         if vtf_data and vtf_data.get("vmt"):
-            VMTCreator.create_from_template(vtf_data["vmt"], output_path, self.compile_root, self.args, self.logger, include_dirs=self.include_dirs)
+            VMTCreator.create_from_template(
+                vtf_data["vmt"], output_path, self.compile_root,
+                self.args, self.logger, include_dirs=self.include_dirs,
+            )
         return True
-    
-    def _handle_image_conversion(self, item: dict, input_path: Path, output_path: Path, input_str: str, output_str: str) -> bool:
-        if not (input_str.endswith(SUPPORTED_IMAGE_FORMAT) and 
+
+    def _handle_image_conversion(self, item: dict, input_path: Path, output_path: Path,
+                                   input_str: str, output_str: str) -> bool:
+        if not (input_str.endswith(SUPPORTED_IMAGE_FORMAT) and
                 output_str.endswith(SUPPORTED_IMAGE_FORMAT)):
             return False
-        
+
         try:
             if convert_image(input_path, output_path):
                 self.logger.info(f"Converted image: {input_path.name} -> {output_path.name}")
@@ -144,14 +180,16 @@ class DataProcessor:
         except Exception as e:
             self.logger.error(f"Failed to convert: {input_path} -> {output_path} | {e}")
             return True
-    
+
     def _copy_file(self, input_path: Path, output_path: Path):
         shutil.copy2(input_path, output_path)
         self.logger.info(f"Copied file: {input_path.name} -> {output_path.name}")
 
+
 class ModelCompiler:
-    def __init__(self, studiomdl_exe: Path, search_paths: List[Path],  vtfcmd_exe: Optional[Path], 
-                 gameinfo_dir: Optional[Path], args, logger: Logger, global_includedirs: list = None,
+    def __init__(self, studiomdl_exe: Path, search_paths: List[Path],
+                 vtfcmd_exe: Optional[Path], gameinfo_dir: Optional[Path],
+                 args, logger: Logger, global_includedirs: list = None,
                  moddir: Optional[Path] = None, vprojectdir: Optional[Path] = None):
         self.studiomdl_exe = studiomdl_exe
         self.search_paths = search_paths
@@ -163,7 +201,7 @@ class ModelCompiler:
         self.global_includedirs = global_includedirs if global_includedirs is not None else []
         self.moddir = moddir
         self.vprojectdir = vprojectdir
-    
+
     def _parse_model_defines(self, model_define_vars: dict) -> tuple[dict, dict]:
         regular_model_defines = {}
         targeted_model_defines = {}
@@ -171,35 +209,38 @@ class ModelCompiler:
         for name, value in model_define_vars.items():
             if isinstance(value, dict) and 'targets' in value and 'value' in value:
                 for target_name in value['targets']:
-                    if target_name not in targeted_model_defines:
-                        targeted_model_defines[target_name] = {}
-                    targeted_model_defines[target_name][name] = value['value']
+                    targeted_model_defines.setdefault(target_name, {})[name] = value['value']
             elif isinstance(value, dict) and 'value' in value:
                 regular_model_defines[name] = value['value']
             else:
                 regular_model_defines[name] = value
-        
+
         return regular_model_defines, targeted_model_defines
 
-    def _get_qc_defines(self, target_name: str, regular_vars: dict, targeted_vars: dict, global_vars: dict) -> dict:
+    def _get_qc_defines(self, target_name: str, regular_vars: dict,
+                        targeted_vars: dict, global_vars: dict) -> dict:
         defines = global_vars.copy()
         defines.update(regular_vars)
         if target_name in targeted_vars:
             defines.update(targeted_vars[target_name])
         return defines
 
-    def _compile_single_qc(self, qc_path: Path, base_name: str, variables: dict, output_dir: Optional[Path], 
-                           game_dir: Optional[Path], logger: Logger, include_dirs: list = None):
+    def _compile_single_qc(self, qc_path: Path, base_name: str, variables: dict,
+                            output_dir: Optional[Path], game_dir: Optional[Path],
+                            logger: Logger, include_dirs: list = None):
+        temp_qc = self._process_qc(qc_path, logger, base_name=base_name,
+                                    variables=variables, include_dirs=include_dirs)
         
-        temp_qc = self._process_qc(qc_path, logger, base_name=base_name, variables=variables, include_dirs=include_dirs)
-        
+        success = False
+        dumped_materials = []
         try:
             success, _, dumped_materials = model_compile_studiomdl(
                 studiomdl_exe=self.studiomdl_exe,
                 qc_file=temp_qc,
                 output_dir=output_dir,
                 game_dir=game_dir,
-                vproject_dir=None if getattr(self.args, 'no_vproject', False) else (self.vprojectdir or game_dir),
+                vproject_dir=(None if getattr(self.args, 'no_vproject', False)
+                              else (self.vprojectdir or game_dir)),
                 verbose=self.args.verbose,
                 logger=logger,
             )
@@ -207,31 +248,37 @@ class ModelCompiler:
             if temp_qc.exists():
                 processed_dir = qc_path.parent / ".processed-qc"
                 processed_dir.mkdir(parents=True, exist_ok=True)
-                target_path = processed_dir / temp_qc.name
+                target_path = processed_dir / temp_qc.name.replace("temp_", "")
                 try:
                     shutil.move(str(temp_qc), str(target_path))
                     logger.info(f"Moved Processed QC to {target_path}")
                 except Exception as e:
                     logger.warn(f"Failed to move Processed QC to processed-qc: {e}")
-                
+
         return success, dumped_materials
 
-    def compile_model(self, model_name: str, model_data: dict, compile_root: Path, global_vars: dict = None):
+    def compile_model(self, model_name: str, model_data: dict, compile_root: Path,
+                      global_vars: dict = None) -> bool:
         self.logger.info("")
         model_logger = self.logger.with_context("MODEL")
-        
+
         model_logger.info(f"Compiling model: {model_name}")
-        
+
         qc_path = Path(model_data.get("qc")).resolve()
         if not qc_path.exists():
             model_logger.error(f"QC file not found: {qc_path}")
-            return False  
-        
+            return False
+
         game_dir = self.gameinfo_dir
+
         if self.args.game:
             if not game_dir and not self.vprojectdir:
-                model_logger.error("--game mode requires either 'gameinfo' or 'vprojectdir' to be defined in config.")
-                return
+                model_logger.error(
+                    "--game mode requires either 'gameinfo' or 'vprojectdir' to be defined in config."
+                )
+
+                return False
+
             if self.moddir:
                 output_dir = self.moddir
             elif getattr(self.args, 'no_vproject', False):
@@ -240,127 +287,145 @@ class ModelCompiler:
                 output_dir = None
             model_logger.info(f"Compiling model {qc_path.name} directly to game directory")
         else:
-            output_dir = compile_root if getattr(self.args, 'single_addon', False) else compile_root / model_name
+            output_dir = (compile_root if getattr(self.args, 'single_addon', False)
+                          else compile_root / model_name)
             output_dir.mkdir(parents=True, exist_ok=True)
             model_logger.info(f"Compiling model {qc_path.name}")
-        
+
         global_vars = global_vars or {}
         global_regular, _ = self._parse_model_defines(global_vars)
 
         model_define_vars = model_data.get("definevariable", {})
         regular_model_defines, targeted_model_defines = self._parse_model_defines(model_define_vars)
-        
-        main_model_defines = self._get_qc_defines("qc", regular_model_defines, targeted_model_defines, global_regular)
-        
+
+        main_model_defines = self._get_qc_defines(
+            "qc", regular_model_defines, targeted_model_defines, global_regular
+        )
+
         include_dirs = self.global_includedirs.copy()
-        
-        if "includedirs" in model_data:
-            model_include_dirs = model_data["includedirs"]
-            if isinstance(model_include_dirs, list):
-                include_dirs.extend(model_include_dirs)
+        model_include_dirs = model_data.get("includedirs")
+        if isinstance(model_include_dirs, list):
+            include_dirs.extend(model_include_dirs)
 
         success, dumped_materials = self._compile_single_qc(
-            qc_path, model_name, main_model_defines, output_dir, game_dir, model_logger,
-            include_dirs=include_dirs
+            qc_path, model_name, main_model_defines, output_dir, game_dir,
+            model_logger, include_dirs=include_dirs,
         )
-        
+
         if not success:
             model_logger.error("Main QC compilation failed.")
-            return False   
-        
+            return False
+
         dumped_materials = set(dumped_materials)
         model_logger.info(f"Compiled {qc_path.name} ({len(dumped_materials)} materials)")
-        
+
         self._compile_submodels(
-            model_data, qc_path, output_dir, dumped_materials, model_logger, 
-            game_dir=game_dir, 
-            global_vars=global_regular, 
-            regular_model_vars=regular_model_defines, 
-            targeted_model_vars=targeted_model_defines, 
+            model_data, qc_path, output_dir, dumped_materials, model_logger,
+            game_dir=game_dir,
+            global_vars=global_regular,
+            regular_model_vars=regular_model_defines,
+            targeted_model_vars=targeted_model_defines,
             model_name=model_name,
-            include_dirs=include_dirs
+            include_dirs=include_dirs,
         )
-        
+
         if self.args.game:
             return True
-        
+
         self._process_materials(qc_path, dumped_materials, output_dir, compile_root, model_logger)
         self._process_subdata(model_data, output_dir, compile_root)
 
-        return True 
-    
-    def _process_qc(self, qc_path: Path, logger: Logger, base_name: str, variables: dict = None, include_dirs: list = None) -> Path:
+        return True
+
+    def _process_qc(self, qc_path: Path, logger: Logger, base_name: str,
+                    variables: dict = None, include_dirs: list = None) -> Path:
         temp_qc_name = f"temp_{base_name}.qc"
         temp_qc = qc_path.parent / temp_qc_name
 
         compiler_name = self.studiomdl_exe.stem.lower()
 
-        # NOTE: And I forgot to implement a stop when qc goes shit and still compile the qc
-        # 4/20/2026: Ideally it should now.
-        qc_content = process_qc_file(qc_path, logger=logger, _variables=variables, include_dirs=include_dirs, compiler=compiler_name)
-        
+        qc_content = process_qc_file(
+            qc_path, logger=logger, _variables=variables,
+            include_dirs=include_dirs, compiler=compiler_name,
+        )
+
         with open(temp_qc, 'w', encoding='utf-8') as dst:
             dst.write(qc_content)
-            
+
         logger.info(f"Flattened QC {qc_path.name} to {temp_qc.name}")
         return temp_qc
-    
+
     def _compile_submodels(self, model_data: dict, qc_path: Path, output_dir: Optional[Path],
-                          dumped_materials: Set, logger: Logger, game_dir: Optional[Path],
-                          global_vars: dict, regular_model_vars: dict, targeted_model_vars: dict,
-                          model_name: str = "", include_dirs: list = None):
+                           dumped_materials: Set, logger: Logger, game_dir: Optional[Path],
+                           global_vars: dict, regular_model_vars: dict,
+                           targeted_model_vars: dict, model_name: str = "",
+                           include_dirs: list = None):
         for sub_name, sub_qc_file in model_data.get("submodels", {}).items():
             sub_qc_path = Path(sub_qc_file)
             if not sub_qc_path.is_absolute():
                 sub_qc_path = qc_path.parent / sub_qc_path
             sub_qc_path = sub_qc_path.resolve()
-            
+
             if not sub_qc_path.exists():
                 logger.error(f"Sub-QC not found: {sub_qc_path}")
                 continue
-            
-            submodel_defines = self._get_qc_defines(sub_name, regular_model_vars, targeted_model_vars, global_vars)
-            
+
+            submodel_defines = self._get_qc_defines(
+                sub_name, regular_model_vars, targeted_model_vars, global_vars
+            )
+
             logger.info(f"Compiling sub-QC: {sub_qc_path.name} for submodel '{sub_name}'")
 
-            submodel_base_name = f"{model_name}_{sub_name}"
             success, sub_dumped = self._compile_single_qc(
-                sub_qc_path, submodel_base_name, submodel_defines, output_dir, game_dir, logger, include_dirs=include_dirs
+                sub_qc_path, f"{model_name}_{sub_name}", submodel_defines,
+                output_dir, game_dir, logger, include_dirs=include_dirs,
             )
-            
+
             if success:
-                dumped_materials.update(set(sub_dumped))
+                dumped_materials.update(sub_dumped)
                 logger.info(f"Compiled {sub_qc_path.name} ({len(sub_dumped)} materials)")
-    
-    def _process_materials(self, qc_path: Path, dumped_materials: Set, output_dir: Path, compile_root: Path, logger: Logger):
+
+    def _process_materials(self, qc_path: Path, dumped_materials: Set, output_dir: Path,
+                           compile_root: Path, logger: Logger):
         mode = self.args.mat_mode
-        
+
         if mode == 0:
             logger.warn("Skipping model material copying (mat-mode: 0)")
             return
-        
+
         mat_logger = self.logger.with_context("MATERIAL")
         localize = not self.args.no_mat_local
 
         if getattr(self.args, 'single_addon', False):
             copy_target = compile_root
-            mat_logger.info(f"Single-addon mode: copying materials to addon root (localization: {'on' if localize else 'off'}).")
+            mat_logger.info(
+                f"Single-addon mode: copying materials to addon root "
+                f"(localization: {'on' if localize else 'off'})."
+            )
+        elif mode == 1:
+            copy_target = output_dir
+            mat_logger.info(
+                f"Material mode 'raw-local': copying to model folder "
+                f"(localization: {'on' if localize else 'off'})."
+            )
+        elif mode == 2:
+            copy_target = compile_root / "SharedAssets"
+            mat_logger.info(
+                f"Material mode 'shared': copying to shared folder "
+                f"(localization: {'on' if localize else 'off'})."
+            )
         else:
-            if mode == 1:
-                copy_target = output_dir
-                mat_logger.info(f"Material mode 'raw-local': copying to model folder (localization: {'on' if localize else 'off'}).")
-            elif mode == 2:
-                copy_target = compile_root / "SharedAssets"
-                mat_logger.info(f"Material mode 'shared': copying to shared folder (localization: {'on' if localize else 'off'}).")
+            mat_logger.warn(f"Unrecognised mat-mode {mode}, skipping material copy.")
+            return
 
         copy_target.mkdir(parents=True, exist_ok=True)
-        
+
         qc_material_paths = qc_read_materials(qc_path, dumped_materials)
         mat_logger.info(f"Found {len(dumped_materials)} cdmaterials paths from Compile")
-        
+
         for mat in qc_material_paths:
             mat_logger.debug(mat)
-        
+
         mat_logger.info(f"Copying {len(dumped_materials)} materials to {copy_target}...")
         material_to_vmt = map_materials_to_vmt(
             qc_material_paths, self.search_paths, logger=mat_logger
@@ -374,27 +439,32 @@ class ModelCompiler:
             vpk_cache=self._vpk_cache,
         )
         mat_logger.info(f"Material copy complete ({len(copied_files)} files).")
-    
+
     def _process_subdata(self, model_data: dict, output_dir: Path, compile_root: Path):
         subdata = model_data.get("subdata", [])
         if subdata:
-            processor = DataProcessor(compile_root, self.vtfcmd_exe, self.args, self.logger, include_dirs=self.global_includedirs)
+            processor = DataProcessor(
+                compile_root, self.vtfcmd_exe, self.args, self.logger,
+                include_dirs=self.global_includedirs,
+            )
             processor.process_items(subdata, output_dir)
+
 
 class MaterialSetCopier:
     @staticmethod
-    def copy_set(set_name: str, set_data: dict, compile_root: Path, search_paths: List[Path], logger: Logger):
+    def copy_set(set_name: str, set_data: dict, compile_root: Path,
+                 search_paths: List[Path], logger: Logger):
         mat_logger = logger.with_context("MATERIAL")
         vmt_list = set_data.get("materials", [])
-        
+
         if not vmt_list:
             mat_logger.warn(f"[{set_name}] No materials listed — skipping.")
             return
-        
+
         mat_logger.info(f"[{set_name}] Copying material set...")
         output_dir = compile_root / set_name
         output_dir.mkdir(parents=True, exist_ok=True)
-        
+
         material_to_vmt = {Path(vmt): Path(vmt) for vmt in vmt_list}
         copied_files = copy_materials(
             material_to_vmt,
@@ -403,91 +473,101 @@ class MaterialSetCopier:
             localize_data=True,
             logger=mat_logger,
         )
-        
+
         mat_logger.info(f"Material-only copy complete ({len(copied_files)} files).")
+
 
 class ValveModelPipeline:
     def __init__(self, config: dict, args, logger: Logger):
         self.config = config
         self.args = args
         self.logger = logger
-    
+
     def execute(self):
         studiomdl_exe, gameinfo_path, vtfcmd_exe, packager_exe = PathResolver.resolve_and_validate(
             self.config, "studiomdl", "gameinfo", "vtfcmd", "packager"
         )
-        
+
         if not studiomdl_exe:
             self.logger.error("Config missing required field: studiomdl")
             return
-        
+
         if isinstance(self.args.game, str):
             game_override_dir = Path(self.args.game)
-            if (game_override_dir / "gameinfo.txt").is_file():
-                gameinfo_path = game_override_dir / "gameinfo.txt"
+            candidate_gi = game_override_dir / "gameinfo.txt"
+            if candidate_gi.is_file():
+                gameinfo_path = candidate_gi
                 self.logger.info(f"--game override: Using gameinfo.txt from {game_override_dir}")
             else:
-                self.logger.warn(f"--game path '{self.args.game}' provided, but no gameinfo.txt found. Ignoring path.")
+                self.logger.warn(
+                    f"--game path '{self.args.game}' provided, but no gameinfo.txt found. Ignoring path."
+                )
 
         if self.args.game and not gameinfo_path:
-            self.logger.error("--game mode requires a valid 'gameinfo' path from config or --game argument.")
+            self.logger.error(
+                "--game mode requires a valid 'gameinfo' path from config or --game argument."
+            )
             return
-        
+
         gameinfo_dir = None
         search_paths = []
         if gameinfo_path:
             gameinfo_dir = gameinfo_path.parent
             search_paths = get_game_search_paths(gameinfo_path)
         else:
-            self.logger.warn("No gameinfo provided. Shared materials and material collection will be limited.")
+            self.logger.warn(
+                "No gameinfo provided. Shared materials and material collection will be limited."
+            )
 
         compile_root = Path(self.args.exportdir.strip('"')).resolve()
         base_compile_root = compile_root
 
-        if self.args.exportdir is None:
-            self.logger.warn(f"--exportdir not provided, using default: {compile_root}")
-
         if self.args.single_addon:
             addon_folder = self.config.get("addonroot", "").strip().strip('"')
             if not self.args.game and not addon_folder:
-                self.logger.error("--single-addon requires 'addonroot' to be defined and non-empty in config.")
+                self.logger.error(
+                    "--single-addon requires 'addonroot' to be defined and non-empty in config."
+                )
                 return
             compile_root = compile_root / addon_folder
+
+            # (made in main()), so this is safe — but document why.
             self.args.mat_mode = 1
             self.logger.info(f"output root set to '{compile_root}', mat-mode forced to 1")
-        
+
         if self.args.game:
             self.logger.info("--game mode enabled: Compiling models directly to game directory")
             if gameinfo_dir:
                 self.logger.info(f"Game directory: {gameinfo_dir}")
             self.logger.info("Materials, data sections, and Packaging will be skipped")
         else:
-            Archiver.clean(compile_root, self.logger, self.args.archive_old_ver, archive_root=base_compile_root)
-        
+            Archiver.clean(compile_root, self.logger, self.args.archive_old_ver,
+                           archive_root=base_compile_root)
+
         if search_paths:
             self.logger.info("")
             self.logger.info("Game search paths:")
             for p in search_paths:
                 self.logger.info(f"\t{p}")
-                
             self.logger.info('')
-        
+
         if vtfcmd_exe:
             self.logger.info(f"VTF conversion enabled: {vtfcmd_exe}")
-        
-        self._compile_models(compile_root, studiomdl_exe, search_paths, 
-                           vtfcmd_exe, gameinfo_dir)
-        
+
+        self._compile_models(compile_root, studiomdl_exe, search_paths, vtfcmd_exe, gameinfo_dir)
+
         if self.args.game:
             return
-        
+
         self._process_material_sets(compile_root, search_paths)
         self._process_data_sections(compile_root, vtfcmd_exe)
-        
+
         if self.args.package_files:
             self._package_archives(compile_root, packager_exe)
-    
-    def _compile_models(self, compile_root: Path, studiomdl_exe: Path, search_paths: List[Path], vtfcmd_exe: Optional[Path], gameinfo_dir: Optional[Path]):
+
+    def _compile_models(self, compile_root: Path, studiomdl_exe: Path,
+                        search_paths: List[Path], vtfcmd_exe: Optional[Path],
+                        gameinfo_dir: Optional[Path]):
         global_includedirs = self.config.get("includedirs", [])
         global_define_vars = self.config.get("definevariable", {})
 
@@ -497,49 +577,53 @@ class ValveModelPipeline:
         vprojectdir_val = self.config.get("vprojectdir")
         vprojectdir = Path(vprojectdir_val).resolve() if vprojectdir_val else None
 
-        compiler = ModelCompiler(studiomdl_exe, search_paths, vtfcmd_exe, gameinfo_dir, self.args, self.logger,
-                                 global_includedirs=global_includedirs, moddir=moddir, vprojectdir=vprojectdir)
+        compiler = ModelCompiler(
+            studiomdl_exe, search_paths, vtfcmd_exe, gameinfo_dir, self.args, self.logger,
+            global_includedirs=global_includedirs, moddir=moddir, vprojectdir=vprojectdir,
+        )
 
         only_filter = [e.lower() for e in self.args.only] if self.args.only else None
 
         for model_name, model_data in self.config.get("model", {}).items():
-            self.logger.root.model_total += 1 
+            self.logger.root.model_total += 1
             if only_filter and model_name.lower() not in only_filter:
                 continue
-            success = compiler.compile_model(model_name, model_data, compile_root, global_vars=global_define_vars)
-            if success:
+            if compiler.compile_model(model_name, model_data, compile_root,
+                                      global_vars=global_define_vars):
                 self.logger.root.model_compiled += 1
-    
+
     def _process_material_sets(self, compile_root: Path, search_paths: List[Path]):
         for set_name, set_data in self.config.get("material", {}).items():
             MaterialSetCopier.copy_set(set_name, set_data, compile_root, search_paths, self.logger)
-    
+
     def _process_data_sections(self, compile_root: Path, vtfcmd_exe: Optional[Path]):
         include_dirs = self.config.get("includedirs", [])
-        processor = DataProcessor(compile_root, vtfcmd_exe, self.args, self.logger, include_dirs=include_dirs)
+        processor = DataProcessor(compile_root, vtfcmd_exe, self.args, self.logger,
+                                  include_dirs=include_dirs)
         only_filter = [e.lower() for e in self.args.only] if self.args.only else None
 
         for folder_name, items in self.config.get("data", {}).items():
-            self.logger.root.data_total += 1  
-
+            self.logger.root.data_total += 1
             if only_filter and folder_name.lower() not in only_filter:
                 continue
-            
             output_dir = compile_root if self.args.single_addon else compile_root / folder_name
             processor.process_items(items, output_dir)
             self.logger.root.data_compiled += 1
-    
+
     def _package_archives(self, compile_root: Path, packager_exe: Optional[Path]):
         if not packager_exe:
-            self.logger.warn("Packager executable not found or missing in config, skipping packaging")
+            self.logger.warn(
+                "Packager executable not found or missing in config, skipping packaging"
+            )
             return
-        
+
         if self.args.single_addon:
             package_archive(packager_exe, compile_root, self.logger)
         else:
             for subfolder in compile_root.iterdir():
                 if subfolder.is_dir():
                     package_archive(packager_exe, subfolder, self.logger)
+
 
 class ValveTexturePipeline:
     def __init__(self, config: dict, args, logger: Logger):
@@ -548,19 +632,19 @@ class ValveTexturePipeline:
         self.logger = logger
         self.processed_files: Set[Path] = set()
         self._sig_cache: Optional[TextureSignatureCache] = None
-    
+
     def execute(self):
         vtfcmd, = PathResolver.resolve_and_validate(self.config, "vtfcmd")
-        
+
         if not vtfcmd:
-            self.logger.error(f"vtfcmd not found in config")
+            self.logger.error("vtfcmd not found in config")
             return
-        
+
         vtf_config = self.config.get("vtf", {})
         if not vtf_config:
             self.logger.warn("No 'vtf' section found in config — nothing to process")
             return
-        
+
         try:
             root_dir = PathResolver.get_root_dir(self.args, Path(self.args.config_path).resolve())
             if getattr(self.args, "dir", None):
@@ -568,13 +652,12 @@ class ValveTexturePipeline:
         except ValueError as e:
             self.logger.error(str(e))
             return
-        
-        # Load (or create) the content-based signature cache.
-        # Stored inside root_dir (where the VTFs live), named after that folder.
-        # e.g. /project/my_textures/ -> /project/my_textures/my_textures.texsig
+
         root_dir.mkdir(parents=True, exist_ok=True)
         self._sig_cache = TextureSignatureCache.for_output_dir(root_dir)
-        self.logger.info(f"Texture signature cache: {root_dir / (root_dir.name + '.texsig')}")
+        self.logger.info(
+            f"Texture signature cache: {root_dir / (root_dir.name + '.texsig')}"
+        )
 
         for key, entry in vtf_config.items():
             self._process_texture_group(key, entry, root_dir, vtfcmd)
@@ -583,86 +666,75 @@ class ValveTexturePipeline:
 
     def _process_texture_group(self, key: str, entry: dict, root_dir: Path, vtfcmd: Path):
         self.logger.info(f"Processing texture group: {key}")
-        
+
         input_pattern = entry.get("input")
         if not input_pattern:
             self.logger.warn(f"Skipped {key} — missing 'input'")
             return
-        
+
         matching_files = self._find_matching_files(input_pattern, root_dir)
         if not matching_files:
             self.logger.info(f"No matching file(s) found for pattern: {input_pattern}")
             return
-        
+
         for src_file in matching_files:
             self._process_texture_file(src_file, entry, root_dir, vtfcmd)
-    
+
     def _find_matching_files(self, pattern: str, root_dir: Path) -> List[Path]:
         if "*" in pattern or re.search(r"[.*+?^${}()|\[\]\\]", pattern):
             regex = re.compile(pattern)
             recursive = getattr(self.args, "recursive", False)
-            
-            if recursive:
-                return [f.resolve() for f in root_dir.rglob("*") 
-                       if f.is_file() and regex.search(f.name)]
-            else:
-                return [f.resolve() for f in root_dir.glob("*") 
-                       if f.is_file() and regex.search(f.name)]
-        
+            glob_iter = root_dir.rglob("*") if recursive else root_dir.glob("*")
+            return [f.resolve() for f in glob_iter if f.is_file() and regex.search(f.name)]
+
         input_path = root_dir / pattern
         return [input_path] if input_path.exists() else []
-    
+
     def _process_texture_file(self, src_file: Path, entry: dict, root_dir: Path, vtfcmd: Path):
         src_file_resolved = src_file.resolve()
-        
-        if (not getattr(self.args, "allow_reprocess", False) and 
-            src_file_resolved in self.processed_files):
+
+        if (not getattr(self.args, "allow_reprocess", False) and
+                src_file_resolved in self.processed_files):
             self.logger.info(f"Skipping {src_file.name} — already processed")
             return
-        
+
         output_path = self._resolve_output_path(src_file, entry, root_dir)
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
         if self._should_skip_conversion(src_file, output_path):
             self.logger.info(f"Skipping {src_file.name} (already up-to-date)")
             self.processed_files.add(src_file_resolved)
             return
-        
+
         self._convert_to_vtf(src_file, output_path, entry, vtfcmd)
         self.processed_files.add(src_file_resolved)
-    
+
     def _resolve_output_path(self, src_file: Path, entry: dict, root_dir: Path) -> Path:
         output_entry = entry.get("output")
         if not output_entry:
             return root_dir / (src_file.stem + ".vtf")
-        
-        output_resolved = (root_dir / output_entry if not Path(output_entry).is_absolute() 
-                          else Path(output_entry))
-        
+
+        output_resolved = (root_dir / output_entry if not Path(output_entry).is_absolute()
+                           else Path(output_entry))
+
         if output_resolved.suffix == "":
             return output_resolved / (src_file.stem + ".vtf")
         return output_resolved.with_suffix(".vtf")
-    
+
     def _should_skip_conversion(self, src_file: Path, output_path: Path) -> bool:
         if getattr(self.args, "forceupdate", False):
             return False
-
         if not output_path.exists():
             return False
-
-        # content-based signature (format/mtime-agnostic).
-        # If the raw bytes haven't changed since the last successful
-        # conversion we can skip safely even if the file was re-saved.
         if self._sig_cache is not None:
             return self._sig_cache.is_unchanged(src_file)
-
         return False
-    
+
     def _convert_to_vtf(self, src_file: Path, output_path: Path, entry: dict, vtfcmd: Path):
         vtf_settings = entry.get("vtf", {})
         flags = vtf_settings.get("flags")
         extra_args = vtf_settings.get("encoder_args")
-        
+
         self.logger.info(f"Converting: {src_file.name} -> {output_path.name}")
         try:
             export_vtf(
@@ -672,15 +744,29 @@ class ValveTexturePipeline:
                 flags=flags,
                 extra_args=extra_args,
             )
-            os.utime(output_path, (src_file.stat().st_atime, src_file.stat().st_mtime))
+            stat = src_file.stat()
+            os.utime(output_path, (stat.st_atime, stat.st_mtime))
             self.logger.debug(f"Finished VTF: {output_path} (mtime synced to source)")
 
-            # Record the source image's content signature so future runs can
-            # skip this file even if its format changes.
             if self._sig_cache is not None:
                 self._sig_cache.record(src_file)
         except Exception as e:
             self.logger.error(f"Failed to export {src_file} -> {output_path}: {e}")
+
+
+# ---------------------------------------------------------------------------
+# Pipeline registry (populated now that all pipeline classes are defined)
+# ---------------------------------------------------------------------------
+
+PIPELINE_REGISTRY = {
+    "ValveModel":   ValveModelPipeline,
+    "ValveTexture": ValveTexturePipeline,
+}
+
+
+# ---------------------------------------------------------------------------
+# Standalone helpers
+# ---------------------------------------------------------------------------
 
 def process_direct_qc(qc_path_str: str, logger: Logger):
     qc_path = Path(qc_path_str).resolve()
@@ -695,10 +781,8 @@ def process_direct_qc(qc_path_str: str, logger: Logger):
     except Exception as e:
         logger.error(f"Failed to process direct QC: {e}")
 
-@timer
-def main():
-    print_header()
 
+def _build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Source Resource Compiler")
 
     parser.add_argument("config_paths", metavar="INPUT_FILE", nargs="+",
@@ -710,44 +794,41 @@ def main():
                         help="Enable verbose logging.")
 
     model_group = parser.add_argument_group("ValveModel Pipeline")
-    model_group.add_argument("--exportdir", metavar="COMPILE_DIR",
-                         default=None,
-                         help="Root folder for compiled output. Defaults to each config's filename as folder name.")
+    model_group.add_argument("--exportdir", metavar="COMPILE_DIR", default=None,
+                             help="Root folder for compiled output. Defaults to each config's filename as folder name.")
     model_group.add_argument("--game", nargs='?', const=True, default=False,
-                         help="Compile models directly to game directory. Optionally provide a path to a directory with gameinfo.txt to override config.")
+                             help="Compile models directly to game directory. Optionally provide a path to a directory with gameinfo.txt to override config.")
     model_group.add_argument("--no-vproject", action="store_true",
-                         help="Do not pass the gameinfo directory to studiomdl via -game flag.")
-    model_group.add_argument("--mat-mode", type=int, default=2, choices=[0,1,2],
-                         help="Material mode: 0=skip, 1=raw-local, 2=shared (default).")
+                             help="Do not pass the gameinfo directory to studiomdl via -game flag.")
+    model_group.add_argument("--mat-mode", type=int, default=2, choices=[0, 1, 2],
+                             help="Material mode: 0=skip, 1=raw-local, 2=shared (default).")
     model_group.add_argument("--no-mat-local", action="store_true",
-                         help="Disable material localization.")
+                             help="Disable material localization.")
     model_group.add_argument("--package-files", action="store_true",
-                         help="Package each subfolder into VPK or GMA archive.")
+                             help="Package each subfolder into VPK or GMA archive.")
     model_group.add_argument("--archive-old-ver", action="store_true",
-                         help="Archive existing files instead of deletion.")
+                             help="Archive existing files instead of deletion.")
     model_group.add_argument("--single-addon", action="store_true",
-                         help="Compile all output into a single addon folder defined by 'addonroot' in config.")
+                             help="Compile all output into a single addon folder defined by 'addonroot' in config.")
     model_group.add_argument("--only", metavar="ENTRY", action="append", default=None,
-                         help="Only compile the specified model or data entry (case-insensitive). Can be specified multiple times.")
+                             help="Only compile the specified model or data entry (case-insensitive). Can be specified multiple times.")
 
     texture_group = parser.add_argument_group("ValveTexture Pipeline")
     texture_group.add_argument("--forceupdate", action="store_true",
-                         help="Force reprocessing all textures.")
+                               help="Force reprocessing all textures.")
     texture_group.add_argument("--allow_reprocess", action="store_true",
-                         help="Allow same file to be processed multiple times.")
+                               help="Allow same file to be processed multiple times.")
     texture_group.add_argument("--recursive", action="store_true",
-                         help="Search for files recursively in subfolders.")
+                               help="Search for files recursively in subfolders.")
 
-    def normalize_args(argv):
-        normalized = []
-        for arg in argv:
-            if arg.startswith('-') and not arg.startswith('--') and len(arg) > 2:
-                normalized.append('-' + arg)
-            else:
-                normalized.append(arg)
-        return normalized
+    return parser
 
-    args = parser.parse_args(normalize_args(sys.argv[1:]))
+
+@timer
+def main():
+    print_header()
+
+    args = _build_arg_parser().parse_args(_normalize_args(sys.argv[1:]))
 
     log_file = None
     if args.log:
@@ -761,15 +842,11 @@ def main():
         logger.info(f"Logging enabled -> {log_file}")
         logger.info("")
 
-    args.basedir = Path.cwd()
-
     for config_path_str in args.config_paths:
         resolved_path = resolve_config_path(config_path_str, logger)
         if not resolved_path:
             logger.info("")
             continue
-
-        args.config_path = resolved_path
 
         if resolved_path.lower().endswith('.qc'):
             process_direct_qc(resolved_path, logger)
@@ -777,7 +854,7 @@ def main():
             continue
 
         try:
-            config = parse_config_json(args.config_path)
+            config = parse_config_json(resolved_path)
         except (FileNotFoundError, ValueError) as e:
             logger.error(str(e))
             logger.info("")
@@ -785,37 +862,44 @@ def main():
 
         header = config.get("header")
         if not header:
-            logger.error(f"[{Path(resolved_path).name}] Missing 'header' field in config — cannot determine pipeline type.")
+            logger.error(
+                f"[{Path(resolved_path).name}] Missing 'header' field in config "
+                "— cannot determine pipeline type."
+            )
             logger.info("")
             continue
 
-        if args.exportdir is not None:
-            args._exportdir_resolved = args.exportdir
-        else:
-            args._exportdir_resolved = Path(resolved_path).stem
-            if len(args.config_paths) > 1:
-                logger.info(f"[{Path(resolved_path).name}] No --exportdir set, using '{args._exportdir_resolved}' as output folder.")
+        pipeline_cls = PIPELINE_REGISTRY.get(header)
+        if pipeline_cls is None:
+            logger.error(f"Unknown pipeline header: '{header}'")
+            logger.info("")
+            continue
 
-        _original_exportdir = args.exportdir
-        args.exportdir = args._exportdir_resolved
+        run_args = copy.copy(args)
+        run_args.basedir = Path.cwd()
+        run_args.config_path = resolved_path
+
+        if args.exportdir is not None:
+            run_args.exportdir = args.exportdir
+        else:
+            run_args.exportdir = Path(resolved_path).stem
+            if len(args.config_paths) > 1:
+                logger.info(
+                    f"[{Path(resolved_path).name}] No --exportdir set, "
+                    f"using '{run_args.exportdir}' as output folder."
+                )
 
         try:
-            if header == "ValveModel":
-                ValveModelPipeline(config, args, logger).execute()
-            elif header == "ValveTexture":
-                ValveTexturePipeline(config, args, logger).execute()
-            else:
-                logger.error(f"Unknown pipeline header: {header}")
+            pipeline_cls(config, run_args, logger).execute()
         except Exception as e:
             import traceback
             logger.error(f"Pipeline execution failed for '{Path(resolved_path).name}': {e}")
             traceback.print_exc()
-        finally:
-            args.exportdir = _original_exportdir
 
         logger.info("")
 
     return logger
+
 
 if __name__ == "__main__":
     try:
@@ -826,13 +910,10 @@ if __name__ == "__main__":
                 sys.exit(1)
             try:
                 resolved = resolve_config_path(config_args[0])
-
                 if not resolved:
                     print(json.dumps({"error": f"Config not found: {config_args[0]}"}))
                     sys.exit(1)
-
                 config = parse_config_json(resolved)
-
                 print(json.dumps({
                     "model": list(config.get("model", {}).keys()),
                     "data":  list(config.get("data",  {}).keys()),
@@ -840,8 +921,8 @@ if __name__ == "__main__":
             except Exception as e:
                 print(json.dumps({"error": str(e)}))
                 sys.exit(1)
-
             sys.exit(0)
+
         main()
     except KeyboardInterrupt:
         print("\n\nOperation cancelled by user.")
