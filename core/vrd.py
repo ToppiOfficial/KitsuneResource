@@ -7,36 +7,54 @@ def _strip_prefix(bone_name: str) -> str:
     return bone_name.split('.')[-1]
 
 
-def generate_lookat_vrd(target_bone: str, attachment_name: str, frame_index: int, aimvector: tuple,
-                        upvector: tuple, helper_bones: list[str], pose_path: str,
-                        pose_dir: Path, vrd_dir: Path, vrd_name: str,
-                        scale: float = 1.0, logger=None) -> Path:
-
-    pose_file = (pose_dir / pose_path).resolve()
-    ext = pose_file.suffix.lower()
+def _load_euler_frames(filepath: Path, scale: float) -> bone_animations.BoneFrameData:
+    """Load a DMX or SMD file and return euler-degree frames, with scale applied."""
+    ext = filepath.suffix.lower()
     if not ext:
         for candidate_ext in (".dmx", ".smd"):
-            candidate = pose_file.with_suffix(candidate_ext)
+            candidate = filepath.with_suffix(candidate_ext)
             if candidate.exists():
-                pose_file = candidate
+                filepath = candidate
                 ext = candidate_ext
                 break
 
     if ext == ".smd":
-        euler_frames = bone_animations.frames_rotation_to_degrees(
-            bone_animations.read_smd_bone_animation(str(pose_file))
+        frames = bone_animations.frames_rotation_to_degrees(
+            bone_animations.read_smd_bone_animation(str(filepath))
         )
     elif ext == ".dmx":
-        euler_frames = bone_animations.frames_rotation_to_degrees(
+        frames = bone_animations.frames_rotation_to_degrees(
             bone_animations.frames_quat_to_euler(
-                bone_animations.read_dmx_bone_animation(str(pose_file))
+                bone_animations.read_dmx_bone_animation(str(filepath))
             )
         )
     else:
         raise ValueError(f"Unsupported format: {ext}")
 
     if scale != 1.0:
-        euler_frames = bone_animations.apply_world_scale(euler_frames, scale)
+        frames = bone_animations.apply_world_scale(frames, scale)
+
+    return frames
+
+
+def _resolve_pose_file(pose_dir: Path, pose_path: str) -> Path:
+    p = (pose_dir / pose_path).resolve()
+    if p.suffix.lower() or p.exists():
+        return p
+    for ext in (".dmx", ".smd"):
+        candidate = p.with_suffix(ext)
+        if candidate.exists():
+            return candidate
+    return p
+
+
+def generate_lookat_vrd(target_bone: str, attachment_name: str, frame_index: int, aimvector: tuple,
+                        upvector: tuple, helper_bones: list[str], pose_path: str,
+                        pose_dir: Path, vrd_dir: Path, vrd_name: str,
+                        scale: float = 1.0, logger=None) -> Path:
+
+    pose_file    = _resolve_pose_file(pose_dir, pose_path)
+    euler_frames = _load_euler_frames(pose_file, scale)
 
     if frame_index >= len(euler_frames):
         frame_index = len(euler_frames) - 1
@@ -78,36 +96,42 @@ def generate_lookat_vrd(target_bone: str, attachment_name: str, frame_index: int
 
 def generate_vrd(driver_bone: str, pose_path: str, triggers: list[tuple[float, int]],
                  target_bones: list[str], pose_dir: Path, vrd_dir: Path, vrd_name: str,
-                 scale: float = 1.0, logger=None) -> Path:
+                 scale: float = 1.0, logger=None,
+                 restpose_path: str | None = None, restpose_frame: int = 0) -> Path:
 
-    pose_file = (pose_dir / pose_path).resolve()
-    ext = pose_file.suffix.lower()
-    if not ext:
-        for candidate_ext in (".dmx", ".smd"):
-            candidate = pose_file.with_suffix(candidate_ext)
-            if candidate.exists():
-                pose_file = candidate
-                ext = candidate_ext
-                break
+    pose_file    = _resolve_pose_file(pose_dir, pose_path)
+    euler_frames = _load_euler_frames(pose_file, scale)
 
-    if ext == ".smd":
-        euler_frames = bone_animations.frames_rotation_to_degrees(
-            bone_animations.read_smd_bone_animation(str(pose_file))
-        )
-    elif ext == ".dmx":
-        euler_frames = bone_animations.frames_rotation_to_degrees(
-            bone_animations.frames_quat_to_euler(
-                bone_animations.read_dmx_bone_animation(str(pose_file))
-            )
-        )
-    else:
-        raise ValueError(f"Unsupported format: {ext}")
+    # ------------------------------------------------------------------
+    # Retargeting: map pose deltas onto a different rest skeleton.
+    #
+    # For each trigger frame:
+    #   delta     = pose[trigger] - pose[frame_0]   (animation offset)
+    #   result    = restpose[restpose_frame] + delta
+    #
+    # This lets a pose file authored on a different proportioned skeleton
+    # (longer/shorter limbs) drive procedural bones using the restpose
+    # matrices, so the VRD reflects the actual in-game rest skeleton.
+    # ------------------------------------------------------------------
+    rest_map       = None   # restpose bone transforms, keyed by bone_name.lower()
+    pose_rest_map  = None   # pose frame-0 transforms, for delta computation
 
-    if scale != 1.0:
-        euler_frames = bone_animations.apply_world_scale(euler_frames, scale)
+    if restpose_path is not None:
+        rp_file = _resolve_pose_file(pose_dir, restpose_path)
+        try:
+            rp_frames = _load_euler_frames(rp_file, scale)
+        except Exception as e:
+            raise ValueError(f"Failed to load restpose '{restpose_path}': {e}")
 
-    hierarchy = {bt.bone_name.lower(): bt for bt in euler_frames[0]}
-    d_key     = driver_bone.lower()
+        ri        = min(restpose_frame, len(rp_frames) - 1)
+        rest_map  = {bt.bone_name.lower(): bt for bt in rp_frames[ri]}
+        pose_rest_map = {bt.bone_name.lower(): bt for bt in euler_frames[0]}
+
+        if logger:
+            logger.info(f"(VRD retarget): restpose '{rp_file.name}' frame {ri}")
+
+    hierarchy  = {bt.bone_name.lower(): bt for bt in euler_frames[0]}
+    d_key      = driver_bone.lower()
     driver_ref = hierarchy.get(d_key)
 
     if not driver_ref:
@@ -137,12 +161,35 @@ def generate_vrd(driver_bone: str, pose_path: str, triggers: list[tuple[float, i
                 frame_index = len(euler_frames) - 1
 
             frame_map = {bt.bone_name.lower(): bt for bt in euler_frames[frame_index]}
-            d_bt = frame_map.get(d_key)
-            h_bt = frame_map.get(h_key)
 
-            d_rot = d_bt.rotation if d_bt else (0.0, 0.0, 0.0)
-            h_rot = h_bt.rotation if h_bt else (0.0, 0.0, 0.0)
-            h_loc = h_bt.location if h_bt else (0.0, 0.0, 0.0)
+            if rest_map is not None:
+                # --- retargeted path ---
+                def _retarget(key):
+                    trigger_bt = frame_map.get(key)
+                    pose_rest  = pose_rest_map.get(key)
+                    rp_base    = rest_map.get(key)
+
+                    t_rot = trigger_bt.rotation if trigger_bt else (0.0, 0.0, 0.0)
+                    r_rot = pose_rest.rotation  if pose_rest  else (0.0, 0.0, 0.0)
+                    b_rot = rp_base.rotation    if rp_base    else (0.0, 0.0, 0.0)
+                    out_rot = tuple(b + (t - r) for b, t, r in zip(b_rot, t_rot, r_rot))
+
+                    t_loc = trigger_bt.location if trigger_bt else (0.0, 0.0, 0.0)
+                    r_loc = pose_rest.location  if pose_rest  else (0.0, 0.0, 0.0)
+                    b_loc = rp_base.location    if rp_base    else (0.0, 0.0, 0.0)
+                    out_loc = tuple(b + (t - r) for b, t, r in zip(b_loc, t_loc, r_loc))
+
+                    return out_rot, out_loc
+
+                d_rot, _     = _retarget(d_key)
+                h_rot, h_loc = _retarget(h_key)
+            else:
+                # --- direct path (original behaviour) ---
+                d_bt  = frame_map.get(d_key)
+                h_bt  = frame_map.get(h_key)
+                d_rot = d_bt.rotation if d_bt else (0.0, 0.0, 0.0)
+                h_rot = h_bt.rotation if h_bt else (0.0, 0.0, 0.0)
+                h_loc = h_bt.location if h_bt else (0.0, 0.0, 0.0)
 
             dr = " ".join(f"{v:.6g}" for v in d_rot)
             hr = " ".join(f"{v:.6g}" for v in h_rot)

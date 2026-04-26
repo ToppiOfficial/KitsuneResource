@@ -347,6 +347,7 @@ class ModelCompiler:
         qc_content = process_qc_file(
             qc_path, logger=logger, _variables=variables,
             include_dirs=include_dirs, compiler=compiler_name,
+            vrd_prefix=base_name,
         )
 
         with open(temp_qc, 'w', encoding='utf-8') as dst:

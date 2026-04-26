@@ -92,7 +92,8 @@ class QCProcessor:
         include_dirs: list    = None,
         root_dir: Path        = None,
         current_scale: float  = 1.0,
-        compiler: str         = None
+        compiler: str         = None,
+        vrd_prefix: str       = None,
     ):
         self.variables           = variables if variables is not None else {}
         self.macros              = macros    if macros    is not None else {}
@@ -107,6 +108,7 @@ class QCProcessor:
         self.pushd_stack         = []
         self.current_scale       = current_scale
         self.compiler            = compiler
+        self.vrd_prefix          = vrd_prefix
         self.vrd_name_counts     = {}
 
     def _log(self, level: str, color: str, msg: str):
@@ -422,7 +424,7 @@ class QCProcessor:
     # ------------------------------------------------------------------
 
     def _parse_driverbone_block(self, all_lines: list, start: int) -> tuple[dict | None, int]:
-        result = {"pose": None, "triggers": [], "target_bones": []}
+        result = {"pose": None, "restpose": None, "triggers": [], "target_bones": []}
         i = start - 1
 
         while i < len(all_lines) and "{" not in all_lines[i]:
@@ -431,21 +433,40 @@ class QCProcessor:
             return None, i
         i += 1
 
+        saved_if_stack = self.if_stack
+        self.if_stack  = []
+
         while i < len(all_lines):
-            line = all_lines[i].strip()
+            raw = all_lines[i].strip()
             i += 1
 
-            if line == "}":
+            if raw == "}":
                 break
-            if not line or line.startswith("//"):
+            if not raw or raw.startswith("//"):
                 continue
 
-            tokens = shlex.split(line)
+            raw_parts = self._parse_command(raw)
+            raw_cmd   = raw_parts[0].lower() if raw_parts else ""
+
+            is_skipping = bool(self.if_stack) and not self.if_stack[-1][0]
+            if self._handle_conditional(raw_cmd, raw_parts, i, is_skipping):
+                continue
+            if is_skipping:
+                continue
+
+            line, _  = self._substitute_variables(raw, i)
+            tokens   = self._parse_command(line)
             if not tokens:
                 continue
 
             if tokens[0].lower() == "pose":
                 result["pose"] = tokens[1]
+                continue
+
+            if tokens[0].lower() == "restpose":
+                fp = tokens[1] if len(tokens) > 1 else None
+                fi = int(tokens[2]) if len(tokens) > 2 else 0
+                result["restpose"] = (fp, fi)
                 continue
 
             j = 0
@@ -466,6 +487,7 @@ class QCProcessor:
                 result["target_bones"].append(tok.strip('"'))
                 j += 1
 
+        self.if_stack = saved_if_stack
         return result, i
 
     def _parse_driverlookatbone_block(self, all_lines: list, start: int) -> tuple[dict | None, int]:
@@ -567,7 +589,8 @@ class QCProcessor:
                 _pushd_stack=self.pushd_stack,
                 _vrd_name_counts=self.vrd_name_counts,
                 _current_scale=self.current_scale,
-                compiler=self.compiler
+                compiler=self.compiler,
+                vrd_prefix=self.vrd_prefix,
             )
             return header + nested + "\n"
         except Exception as e:
@@ -774,7 +797,8 @@ class QCProcessor:
                     )
 
                 pose_stem = Path(block["pose"]).stem.lower()
-                vrd_name  = re.sub(r'[^\w]', '_', f"{pose_stem}_{driver_bone.lower()}")
+                _vrd_base = f"{self.vrd_prefix}_{pose_stem}_{driver_bone.lower()}" if self.vrd_prefix else f"{pose_stem}_{driver_bone.lower()}"
+                vrd_name  = re.sub(r'[^\w]', '_', _vrd_base)
                 count     = self.vrd_name_counts.get(vrd_name, 0)
                 self.vrd_name_counts[vrd_name] = count + 1
                 if count > 0:
@@ -782,9 +806,12 @@ class QCProcessor:
 
                 pose_base = self.pushd_stack[-1] if self.pushd_stack else self.root_dir
                 try:
+                    restpose = block.get("restpose")
                     vrd_module.generate_vrd(
                         driver_bone, block["pose"], block["triggers"], block["target_bones"],
-                        pose_base, self.root_dir, vrd_name, self.current_scale, logger=self.logger
+                        pose_base, self.root_dir, vrd_name, self.current_scale, logger=self.logger,
+                        restpose_path=restpose[0] if restpose else None,
+                        restpose_frame=restpose[1] if restpose else 0,
                     )
                 except Exception as e:
                     raise QCCompileError(f"Line {line_num}: Failed to generate VRD for '{driver_bone}': {e}")
@@ -810,7 +837,8 @@ class QCProcessor:
                     )
 
                 pose_stem       = Path(block["pose"]).stem.lower()
-                vrd_name        = re.sub(r'[^\w]', '_', f"lookat_{pose_stem}_{target_bone.lower()}")
+                _vrd_base       = f"{self.vrd_prefix}_lookat_{pose_stem}_{target_bone.lower()}" if self.vrd_prefix else f"lookat_{pose_stem}_{target_bone.lower()}"
+                vrd_name        = re.sub(r'[^\w]', '_', _vrd_base)
                 count           = self.vrd_name_counts.get(vrd_name, 0)
                 self.vrd_name_counts[vrd_name] = count + 1
                 if count > 0:
@@ -1235,7 +1263,8 @@ def process_qc_file(
     _pushd_stack: list    = None,
     _vrd_name_counts: dict = None,
     _current_scale: float = 1.0,
-    compiler: str         = None
+    compiler: str         = None,
+    vrd_prefix: str       = None,
 ) -> str:
 
     _include_stack = _include_stack or set()
@@ -1257,11 +1286,13 @@ def process_qc_file(
     _include_stack.add(resolved)
     _root_dir = _root_dir or resolved.parent
 
-    processor              = QCProcessor(_variables, _macros, logger,
-                                         include_dirs=include_dirs or [],
-                                         root_dir=_root_dir,
-                                         current_scale=_current_scale,
-                                         compiler=compiler)
+    processor = QCProcessor(_variables, _macros, logger,
+                            include_dirs=include_dirs or [],
+                            root_dir=_root_dir,
+                            current_scale=_current_scale,
+                            compiler=compiler,
+                            vrd_prefix=vrd_prefix)
+    
     processor.defined_vars  = _defined_vars
     processor.pushd_stack   = _pushd_stack
     processor.vrd_name_counts = _vrd_name_counts if _vrd_name_counts is not None else {}
