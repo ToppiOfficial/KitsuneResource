@@ -887,7 +887,7 @@ class QCProcessor:
                     block_lines.extend(inner_lines)
                 block_content = "".join(block_lines)
 
-                has_noautodmxrules = "noautodmxrules" in block_content.lower()
+                has_removedmxrules = "removedmxrules" in block_content.lower()
                 sub_parts = self._parse_command(line.strip())
 
                 if len(sub_parts) >= 3:
@@ -905,8 +905,8 @@ class QCProcessor:
                     #
                     # NOTE: The documentation states only Flexcontrollers, what about Flexrules or DominationRule?
                     # TODO: Create a method that checks what engine branch then only run this block if the engine branch
-                    # is tf2 version below.
-                    if has_noautodmxrules and is_dmx and dmx_path:
+                    # is tf2 version below.  LET'S USE REMOVEDMXRULES THAN USING NOAUTODMXRULES !!
+                    if has_removedmxrules and is_dmx and dmx_path:
                         try:
                             orig_enc, orig_ver = "keyvalues2", 1
                             with open(dmx_path, 'rb') as f:
@@ -931,7 +931,7 @@ class QCProcessor:
                             
                             to_delete = [e for e in dm.elements if e.type == "DmeCombinationInputControl"]
                             for e in to_delete:
-                                if self.logger: self.logger.info(f"noautodmxrules: Removing {e.type} '{e.name}'")
+                                if self.logger: self.logger.info(f"removedmxrules: Removing {e.type} '{e.name}'")
                                 dm.elements.remove(e)
                                 for parent in dm.elements:
                                     for attr in parent.values():
@@ -942,7 +942,7 @@ class QCProcessor:
                             final_mesh_path = (Path(mesh_raw).parent / temp_path.name).as_posix()
 
                         except Exception as e:
-                            if self.logger: self.logger.error(f"Line {line_num}: noautodmxrules failed: {e}")
+                            if self.logger: self.logger.error(f"Line {line_num}: removedmxrules failed: {e}")
 
                 # Scaling
                 if self.current_scale != 1.0 and self.compiler != "nekomdl":
@@ -973,8 +973,9 @@ class QCProcessor:
                 # Flex Controllers
                 if len(sub_parts) >= 3 and is_dmx:
                     if dmx_path:
-                        if has_noautodmxrules:
-                            clean_block = re.sub(r"(?i)[ \t]*noautodmxrules[ \t]*", "", block_content)
+                        clean_block = block_content
+                        if has_removedmxrules:
+                            clean_block = re.sub(r"(?i)[ \t]*(?:removedmxrules|noautodmxrules)[ \t]*", "", block_content)
 
                         res_content, errs, count = flex_controllers.inject_flex_controllers_from_dmx(clean_block, dmx_path)
                         

@@ -8,6 +8,7 @@
     "packager": "D:/Program Files/Steam/steamapps/common/GarrysMod/bin/win64/gmad.exe",
     "includedirs": [
         "D:/Development/game-mods/garrysmod/player/.modules/v1.0/_shared_prefabs/",
+        "D:/Development/game-mods/garrysmod/player/.modules/v1.0/_shared_prefabs/legacy/",
         "D:/Development/game-mods/garrysmod/player/.modules/v1.0/"
     ],
     "addonfolder" : "addonroot",

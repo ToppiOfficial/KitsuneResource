@@ -12,6 +12,7 @@
     "addonroot" : "allsurvivors",
     "includedirs": [
         "D:/Development/game-mods/left4dead2/survivors/.modules/v3.0/_shared_prefabs/",
+        "D:/Development/game-mods/left4dead2/survivors/.modules/v3.0/_shared_prefabs/legacy/",
         "D:/Development/game-mods/left4dead2/survivors/.modules/v3.0/_shared_prefabs/animationlist_animswap/",
         "D:/Development/game-mods/left4dead2/survivors/.modules/v3.0/_shared_prefabs/animationlist_animlight/"
     ],
