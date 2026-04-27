@@ -887,7 +887,18 @@ class QCProcessor:
                     block_lines.extend(inner_lines)
                 block_content = "".join(block_lines)
 
-                has_removedmxrules = "removedmxrules" in block_content.lower()
+                _noauto_m = re.search(r'(?i)\bnoautodmxrules(?:\s+(\d+))?', block_content)
+                if _noauto_m:
+                    _noauto_val = int(_noauto_m.group(1)) if _noauto_m.group(1) else 1
+                    noautodmxrules_mode = min(max(_noauto_val, 1), 2)
+                else:
+                    noautodmxrules_mode = 0
+
+                if noautodmxrules_mode == 1:
+                    block_content = re.sub(r'(?i)(\bnoautodmxrules)\s+\d+', r'\1', block_content)
+                elif noautodmxrules_mode == 2:
+                    block_content = re.sub(r'(?i)[ \t]*\bnoautodmxrules(?:\s+\d+)?[ \t]*\n?', '', block_content)
+
                 sub_parts = self._parse_command(line.strip())
 
                 if len(sub_parts) >= 3:
@@ -898,15 +909,11 @@ class QCProcessor:
                     final_mesh_path = mesh_raw
                     dmx_path = self._resolve_dmx_path(mesh_raw, base_dir)
 
-                    # noautodmxrules: 
-                    # This qc parameter doesn't seem to not exist in old engine branches such as 
-                    # TF2's (still doesn't even after the hl2 anniv update), it only exist in later engine branches.
-                    # (maybe after L4D? valid in Source Film Maker upto CSGO[Legacy]).
-                    #
-                    # NOTE: The documentation states only Flexcontrollers, what about Flexrules or DominationRule?
-                    # TODO: Create a method that checks what engine branch then only run this block if the engine branch
-                    # is tf2 version below.  LET'S USE REMOVEDMXRULES THAN USING NOAUTODMXRULES !!
-                    if has_removedmxrules and is_dmx and dmx_path:
+                    # noautodmxrules 2: strip DmeCombinationInputControl elements from the DMX
+                    # and write a temp file so studiomdl never sees the flex rules.
+                    # noautodmxrules / noautodmxrules 1: passed through as plain noautodmxrules;
+                    # Studiomdl handles it natively, no DMX rewrite needed.
+                    if noautodmxrules_mode == 2 and is_dmx and dmx_path:
                         try:
                             orig_enc, orig_ver = "keyvalues2", 1
                             with open(dmx_path, 'rb') as f:
@@ -921,28 +928,43 @@ class QCProcessor:
                             if matches:
                                 orig_enc, orig_ver = matches[0][0], int(matches[0][1])
                             else:
-                                # Check against proto2 format
                                 matches = re.findall(datamodel.header_proto2_regex, header_str)
                                 if matches:
                                     orig_enc, orig_ver = "binary_proto", int(matches[0][0])
 
                             dm = datamodel.load(dmx_path)
                             temp_path = dmx_path.with_name(f"{dmx_path.stem}_norules.dmx")
-                            
-                            to_delete = [e for e in dm.elements if e.type == "DmeCombinationInputControl"]
+
+                            REMOVE_TYPES = {
+                                "DmeCombinationInputControl",
+                                "DmeCombinationDominationRule",
+                            }
+                            to_delete = {e for e in dm.elements if e.type in REMOVE_TYPES}
+
+                            # Remove from element list first
                             for e in to_delete:
-                                if self.logger: self.logger.info(f"removedmxrules: Removing {e.type} '{e.name}'")
+                                if self.logger:
+                                    self.logger.info(f"noautodmxrules 2: Removing {e.type} '{e.name}'")
                                 dm.elements.remove(e)
-                                for parent in dm.elements:
-                                    for attr in parent.values():
-                                        if isinstance(attr, list) and e in attr:
-                                            attr.remove(e)
+
+                            # Scrub all references from surviving elements
+                            for parent in dm.elements:
+                                for attr_key in list(parent.keys()):
+                                    val = parent[attr_key]
+                                    if isinstance(val, datamodel.Element) and val in to_delete:
+                                        del parent[attr_key]
+                                    elif isinstance(val, datamodel._ElementArray):
+                                        # Array reference — strip out any deleted elements in-place
+                                        for e in to_delete:
+                                            while e in val:
+                                                val.remove(e)
 
                             dm.write(temp_path, orig_enc, orig_ver)
                             final_mesh_path = (Path(mesh_raw).parent / temp_path.name).as_posix()
 
                         except Exception as e:
-                            if self.logger: self.logger.error(f"Line {line_num}: removedmxrules failed: {e}")
+                            if self.logger:
+                                self.logger.error(f"Line {line_num}: noautodmxrules 2 failed: {e}")
 
                 # Scaling
                 if self.current_scale != 1.0 and self.compiler != "nekomdl":
@@ -973,12 +995,8 @@ class QCProcessor:
                 # Flex Controllers
                 if len(sub_parts) >= 3 and is_dmx:
                     if dmx_path:
-                        clean_block = block_content
-                        if has_removedmxrules:
-                            clean_block = re.sub(r"(?i)[ \t]*(?:removedmxrules|noautodmxrules)[ \t]*", "", block_content)
+                        res_content, errs, count = flex_controllers.inject_flex_controllers_from_dmx(block_content, dmx_path)
 
-                        res_content, errs, count = flex_controllers.inject_flex_controllers_from_dmx(clean_block, dmx_path)
-                        
                         if final_mesh_path != mesh_raw:
                             res_content = res_content.replace(f'"{mesh_raw}"', f'"{final_mesh_path}"', 1)
 
