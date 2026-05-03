@@ -4,7 +4,7 @@ from datetime import datetime
 from functools import wraps
 from typing import List, Optional
 
-SOFTVERSION = 3.8
+SOFTVERSION = 4.0
 SOFTBUILDDATE = 0
 
 SUPPORTED_TEXT_FORMAT = (
@@ -63,10 +63,12 @@ class Logger:
             self.error_count = 0
             self.root = self
 
-            self.model_compiled = 0
-            self.model_total    = 0
-            self.data_compiled  = 0
-            self.data_total     = 0
+            self.model_compiled    = 0
+            self.model_total       = 0
+            self.submodel_compiled = 0
+            self.submodel_total    = 0
+            self.data_compiled     = 0
+            self.data_total        = 0
 
         self.context = context.upper() if context else None
         self.context_label = self.context
@@ -187,6 +189,8 @@ def timer(func):
                 logger.info("-" * 54)
                 if logger.model_total > 0 or logger.data_total > 0:
                     logger.info(f"  {logger.model_compiled}/{logger.model_total} Models Compiled")
+                    if logger.submodel_total > 0:
+                        logger.info(f"  {logger.submodel_compiled}/{logger.submodel_total} Submodels Compiled")
                     logger.info(f"  {logger.data_compiled}/{logger.data_total} Data Compiled")
                     logger.info('')
                 if logger.warn_count > 0 or logger.error_count > 0:

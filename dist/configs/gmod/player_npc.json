@@ -2,7 +2,7 @@
     "header": "ValveModel",
     "studiomdl": "C:/Program Files (x86)/Steam/steamapps/common/SourceFilmmaker/game/bin/studiomdl.exe",
     "vprojectdir": "C:/Program Files (x86)/Steam/steamapps/common/SourceFilmmaker/game/hl2/",
-    "moddir": "D:/Program Files/Steam/steamapps/common/GarrysMod/garrysmod/addons/my_custom_models",
+    "moddir": "D:/Program Files/Steam/steamapps/common/GarrysMod/garrysmod/",
     "gameinfo": "D:/Program Files/Steam/steamapps/common/GarrysMod/garrysmod/gameinfo.txt",
     "vtfcmd": "D:/Portable Program Files/vtfreloaded/VTFCmd.exe",
     "packager": "D:/Program Files/Steam/steamapps/common/GarrysMod/bin/win64/gmad.exe",

@@ -73,6 +73,22 @@ PIPELINE_REGISTRY: dict = {}  # populated after class definitions below
 
 
 # ---------------------------------------------------------------------------
+# QC path resolution helper
+# ---------------------------------------------------------------------------
+
+def _resolve_qc_path(raw: str) -> Optional[Path]:
+    """Resolve a QC path from config, probing .qc then .qci when no extension is given."""
+    p = Path(raw).resolve()
+    if p.suffix:
+        return p if p.exists() else None
+    for ext in ('.qc', '.qci'):
+        candidate = p.with_suffix(ext)
+        if candidate.exists():
+            return candidate
+    return None
+
+
+# ---------------------------------------------------------------------------
 
 class DataProcessor:
     def __init__(self, compile_root: Path, vtfcmd_exe: Optional[Path], args,
@@ -264,9 +280,14 @@ class ModelCompiler:
 
         model_logger.info(f"Compiling model: {model_name}")
 
-        qc_path = Path(model_data.get("qc")).resolve()
-        if not qc_path.exists():
-            model_logger.error(f"QC file not found: {qc_path}")
+        qc_raw = model_data.get("qc")
+        if not qc_raw:
+            model_logger.error(f"Model '{model_name}' is missing 'qc' field.")
+            return False
+
+        qc_path = _resolve_qc_path(qc_raw)
+        if not qc_path:
+            model_logger.error(f"QC file not found: {qc_raw} (tried .qc and .qci)")
             return False
 
         game_dir = self.gameinfo_dir
@@ -276,7 +297,6 @@ class ModelCompiler:
                 model_logger.error(
                     "--game mode requires either 'gameinfo' or 'vprojectdir' to be defined in config."
                 )
-
                 return False
 
             if self.moddir:
@@ -362,13 +382,15 @@ class ModelCompiler:
                            targeted_model_vars: dict, model_name: str = "",
                            include_dirs: list = None):
         for sub_name, sub_qc_file in model_data.get("submodels", {}).items():
-            sub_qc_path = Path(sub_qc_file)
-            if not sub_qc_path.is_absolute():
-                sub_qc_path = qc_path.parent / sub_qc_path
-            sub_qc_path = sub_qc_path.resolve()
+            self.logger.root.submodel_total += 1
 
-            if not sub_qc_path.exists():
-                logger.error(f"Sub-QC not found: {sub_qc_path}")
+            sub_qc_path = _resolve_qc_path(
+                str(Path(sub_qc_file) if Path(sub_qc_file).is_absolute()
+                    else qc_path.parent / sub_qc_file)
+            )
+
+            if not sub_qc_path:
+                logger.error(f"Sub-QC not found: {sub_qc_file} (tried .qc and .qci)")
                 continue
 
             submodel_defines = self._get_qc_defines(
@@ -385,6 +407,7 @@ class ModelCompiler:
             if success:
                 dumped_materials.update(sub_dumped)
                 logger.info(f"Compiled {sub_qc_path.name} ({len(sub_dumped)} materials)")
+                self.logger.root.submodel_compiled += 1
 
     def _process_materials(self, qc_path: Path, dumped_materials: Set, output_dir: Path,
                            compile_root: Path, logger: Logger):

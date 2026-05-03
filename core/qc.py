@@ -338,27 +338,307 @@ class QCProcessor:
 
         return target, False
 
-    def _resolve_dmx_path(self, raw_path: str, base_dir: Path) -> Optional[Path]:
-        p          = Path(raw_path)
-        candidates = [
-            self.pushd_stack[-1] / p if self.pushd_stack else None,
-            (self.root_dir / p)       if self.root_dir   else None,
-            base_dir / p
-        ]
-        for c in candidates:
-            if c and c.exists():
-                return c
-        return None
-
     def _resolve_mesh_path(self, raw: str, base_dir: Path) -> Optional[Path]:
         """Resolve a mesh path, trying .dmx then .smd if no extension is given."""
-        if Path(raw).suffix.lower() in (".dmx", ".smd"):
-            return self._resolve_dmx_path(raw, base_dir)
-        for ext in (".dmx", ".smd"):
-            p = self._resolve_dmx_path(raw + ext, base_dir)
-            if p:
-                return p
+        paths_to_check = [raw] if Path(raw).suffix.lower() in (".dmx", ".smd") else [raw + ".dmx", raw + ".smd"]
+
+        for p_str in paths_to_check:
+            p = Path(p_str)
+            candidates = [
+                self.pushd_stack[-1] / p if self.pushd_stack else None,
+                (self.root_dir / p)       if self.root_dir   else None,
+                base_dir / p
+            ]
+            for c in candidates:
+                if c and c.exists():
+                    return c
+
         return None
+
+    # ------------------------------------------------------------------
+    # DMX editing — unified helper
+    # ------------------------------------------------------------------
+
+    def _make_edited_dmx(
+        self,
+        dmx_path: Path,
+        vis_changes: list,
+        del_names: list,
+        strip_flex: bool = False,
+    ) -> Path:
+        """
+        Apply visibility changes, mesh deletions, and/or flex-rule stripping to
+        *dmx_path* in a single load-edit-write pass.
+
+        The output filename uses a CRC-32 hex suffix derived from the combined
+        edit set so that identical edits always produce the same file and
+        different combinations never collide.  The file is written alongside
+        the source DMX.
+        """
+        import zlib
+        key_parts: list[str] = []
+        if strip_flex:
+            key_parts.append("norules")
+        if vis_changes:
+            key_parts.append("vis:" + ",".join(f"{n}={v}" for n, v in vis_changes))
+        if del_names:
+            key_parts.append("del:" + ",".join(del_names))
+        crc      = zlib.crc32("|".join(key_parts).encode()) & 0xFFFFFFFF
+        out_path = dmx_path.parent / f"{dmx_path.stem}_{crc:08x}.dmx"
+
+        # ---- sniff original encoding / version --------------------------
+        orig_enc, orig_ver = "keyvalues2", 1
+        try:
+            with open(dmx_path, "rb") as fh:
+                hdr = b""
+                while not hdr.endswith(b">"):
+                    ch = fh.read(1)
+                    if not ch:
+                        break
+                    hdr += ch
+            hdr_str = hdr.decode("ascii", errors="ignore")
+            m = re.findall(datamodel.header_format_regex, hdr_str)
+            if m:
+                orig_enc, orig_ver = m[0][0], int(m[0][1])
+            else:
+                m = re.findall(datamodel.header_proto2_regex, hdr_str)
+                if m:
+                    orig_enc, orig_ver = "binary_proto", int(m[0][0])
+        except Exception:
+            pass
+
+        dm       = datamodel.load(str(dmx_path))
+        mesh_map = {e.name: e for e in dm.elements if e.type == "DmeMesh"}
+
+        # ---- visibility changes -----------------------------------------
+        for mesh_name, visible in vis_changes:
+            elem = mesh_map.get(mesh_name)
+            if elem is not None:
+                elem["visible"] = bool(visible)
+            elif self.logger:
+                self.logger.warn(
+                    f"visiblemesh: DmeMesh '{mesh_name}' not found in '{dmx_path.name}'"
+                )
+
+        # ---- mesh deletions ---------------------------------------------
+        if del_names:
+            to_delete: set = set()
+            for mesh_name in del_names:
+                mesh_elem = mesh_map.get(mesh_name)
+                if mesh_elem is None:
+                    if self.logger:
+                        self.logger.warn(
+                            f"removemesh: DmeMesh '{mesh_name}' not found in '{dmx_path.name}'"
+                        )
+                    continue
+                to_delete.add(mesh_elem)
+                for e in dm.elements:
+                    if e.type == "DmeDag" and e.get("shape") == mesh_elem:
+                        to_delete.add(e)
+                        transform = e.get("transform")
+                        if isinstance(transform, datamodel.Element):
+                            to_delete.add(transform)
+                    elif e.name == mesh_name and e.type in ("DmeDag", "DmeTransform"):
+                        to_delete.add(e)
+            for e in to_delete:
+                if e in dm.elements:
+                    dm.elements.remove(e)
+            for parent in dm.elements:
+                for attr_key in list(parent.keys()):
+                    val = parent[attr_key]
+                    if isinstance(val, datamodel.Element) and val in to_delete:
+                        del parent[attr_key]
+                    elif isinstance(val, datamodel._ElementArray):
+                        for e in to_delete:
+                            while e in val:
+                                val.remove(e)
+
+        # ---- strip flex rules (noautodmxrules 2) ------------------------
+        if strip_flex:
+            REMOVE_TYPES = {"DmeCombinationInputControl", "DmeCombinationDominationRule"}
+            flex_delete  = {e for e in dm.elements if e.type in REMOVE_TYPES}
+            for e in flex_delete:
+                if self.logger:
+                    self.logger.info(f"noautodmxrules 2: Removing {e.type} '{e.name}'")
+                dm.elements.remove(e)
+            for parent in dm.elements:
+                for attr_key in list(parent.keys()):
+                    val = parent[attr_key]
+                    if isinstance(val, datamodel.Element) and val in flex_delete:
+                        del parent[attr_key]
+                    elif isinstance(val, datamodel._ElementArray):
+                        for e in flex_delete:
+                            while e in val:
+                                val.remove(e)
+
+        dm.write(str(out_path), orig_enc, orig_ver)
+        if self.logger:
+            self.logger.info(f"dmx edit: wrote '{out_path.name}'")
+        return out_path
+
+    def _strip_block(self, text: str, keyword: str) -> tuple[Optional[str], str]:
+        """
+        Find the first ``keyword { ... }`` in *text*, extract its content,
+        remove it from *text*, and return ``(content, remaining_text)``.
+        Returns ``(None, text)`` unchanged if the keyword is not found.
+        """
+        m = re.search(r'(?<!\w)' + re.escape(keyword) + r'(?!\w)', text, re.IGNORECASE)
+        if not m:
+            return None, text
+        after = text[m.end():]
+        brace_pos = after.find("{")
+        if brace_pos == -1:
+            return None, text
+        depth = close_pos = 0
+        for ci, ch in enumerate(after):
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    close_pos = ci
+                    break
+        if depth != 0:
+            return None, text
+        content   = after[brace_pos + 1 : close_pos].strip()
+        remaining = text[: m.start()] + after[close_pos + 1 :]
+        return content, remaining
+
+    # ------------------------------------------------------------------
+    # Bodygroup handler
+    # ------------------------------------------------------------------
+
+    def _parse_mesh_vis_tokens(self, content: str) -> list[tuple[str, int]]:
+        """Parse '"name1" 0 "name2" "name3" 1' into [(name1,0),(name2,1),(name3,1)]."""
+        tokens = self._parse_command(content.strip())
+        result, pending = [], []
+        for tok in tokens:
+            t = tok.strip('"')
+            if t in ("0", "1"):
+                for name in pending:
+                    result.append((name, int(t)))
+                pending = []
+            else:
+                pending.append(t)
+        return result
+
+    def _parse_del_tokens(self, content: str) -> list[str]:
+        """Parse mesh names from a removemesh { } block content."""
+        return [t.strip('"') for t in self._parse_command(content.strip()) if t.strip('"')]
+
+    def _extract_block_content(self, text: str, keyword: str) -> str | None:
+        """
+        Find 'keyword { ... }' in text (word-boundary safe) and return the
+        content between the outer braces, or None if not found.
+        """
+        m = re.search(r'(?<!\w)' + re.escape(keyword) + r'(?!\w)', text, re.IGNORECASE)
+        if not m:
+            return None
+        after = text[m.end():]
+        brace_pos = after.find("{")
+        if brace_pos == -1:
+            return None
+        depth = close_pos = 0
+        for ci, ch in enumerate(after):
+            if ch == "{":
+                depth += 1
+            elif ch == "}":
+                depth -= 1
+                if depth == 0:
+                    close_pos = ci
+                    break
+        return after[brace_pos + 1:close_pos].strip() if depth == 0 else None
+
+    def _process_bodygroup_studio_lines(self, block_lines: list, base_dir: Path, line_num: int) -> list:
+        """
+        Scan bodygroup block lines for studio lines carrying visiblemesh{} and/or
+        removemesh{} blocks.  Both keywords may appear together on the same studio
+        line.  Plain studio/blank lines are passed through unchanged.
+        """
+        out = []
+        i = 0
+        while i < len(block_lines):
+            raw = block_lines[i]
+            i += 1
+            stripped = raw.strip()
+
+            if not stripped or stripped.startswith("//"):
+                out.append(raw)
+                continue
+
+            tokens = self._parse_command(stripped)
+            if not tokens or tokens[0].lower() != "studio" or len(tokens) < 2:
+                out.append(raw)
+                continue
+
+            lc = [t.lower() for t in tokens]
+            has_vis = "visiblemesh" in lc
+            has_del = "removemesh"  in lc
+            if not has_vis and not has_del:
+                out.append(raw)
+                continue
+
+            studio_path_raw = tokens[1].strip('"')
+
+            # Build the full text of everything after "studio <path>", collecting
+            # continuation lines until all opened braces are balanced.
+            rest  = " ".join(tokens[2:])
+            depth = rest.count("{") - rest.count("}")
+            while depth > 0 and i < len(block_lines):
+                nxt   = block_lines[i].strip()
+                i    += 1
+                rest += " " + nxt
+                depth += nxt.count("{") - nxt.count("}")
+
+            vis_changes = []
+            del_names   = []
+
+            if has_vis:
+                content = self._extract_block_content(rest, "visiblemesh")
+                if content is not None:
+                    vis_changes = self._parse_mesh_vis_tokens(content)
+
+            if has_del:
+                content = self._extract_block_content(rest, "removemesh")
+                if content is not None:
+                    del_names = self._parse_del_tokens(content)
+
+            if not vis_changes and not del_names:
+                out.append(f'studio "{studio_path_raw}"\n')
+                continue
+
+            dmx_path = self._resolve_mesh_path(studio_path_raw, base_dir)
+            if not dmx_path:
+                if self.logger:
+                    self.logger.warn(
+                        f"Line {line_num}: bodygroup studio: cannot resolve '{studio_path_raw}'"
+                    )
+                out.append(raw)
+                continue
+
+            if dmx_path.suffix.lower() != ".dmx":
+                if self.logger:
+                    self.logger.warn(
+                        f"Line {line_num}: bodygroup studio: '{studio_path_raw}' is not a DMX, skipping edit blocks"
+                    )
+                out.append(f'studio "{studio_path_raw}"\n')
+                continue
+
+            try:
+                out_path = self._make_edited_dmx(dmx_path, vis_changes, del_names)
+            except Exception as e:
+                raise QCCompileError(
+                    f"Line {line_num}: bodygroup studio: failed for '{studio_path_raw}': {e}"
+                )
+
+            orig_dir = str(Path(studio_path_raw).parent)
+            rel_path = (
+                out_path.name if orig_dir == "."
+                else f"{orig_dir}/{out_path.name}".replace("\\", "/")
+            )
+            out.append(f'studio "{rel_path}"\n')
+
+        return out
 
     # ------------------------------------------------------------------
     # Block collection
@@ -562,7 +842,12 @@ class QCProcessor:
                 self.logger.info(f"(local): {target.name}")
                 self.logger.debug(f"(local) full path: {target}")
 
+        if_file_exist = "iffileexist" in [p.lower() for p in parts[2:]]
+
         if not target.exists():
+            if if_file_exist:
+                self._warn(f"Line {line_num}: Optional include not found, skipping: {include_file}")
+                return f"// WARNING Line {line_num}: Optional include not found, skipping: {include_file}\n"
             msg = f"Include file not found at line {line_num}: {include_file}"
             if self.logger: self.logger.error(msg)
             raise FileNotFoundError(msg)
@@ -682,6 +967,10 @@ class QCProcessor:
         if active_command in self.COMMENT_OUT_COMMANDS:
             self._info(processed.strip())
             return "// " + processed
+
+        #if active_command == "$modelname" and len(active_parts) >= 2:
+        #    lowered = active_parts[1].lower()
+        #    return f'$modelname "{lowered}"\n'
 
         return processed
 
@@ -899,72 +1188,58 @@ class QCProcessor:
                 elif noautodmxrules_mode == 2:
                     block_content = re.sub(r'(?i)[ \t]*\bnoautodmxrules(?:\s+\d+)?[ \t]*\n?', '', block_content)
 
+                # Extract removemesh / visiblemesh from block before studiomdl sees it.
+                # Both must be stripped regardless of whether the mesh is a DMX.
+                rm_content,   block_content = self._strip_block(block_content, "removemesh")
+                vm_content,   block_content = self._strip_block(block_content, "visiblemesh")
+                vis_changes_m = self._parse_mesh_vis_tokens(vm_content) if vm_content is not None else []
+                del_names_m   = self._parse_del_tokens(rm_content)      if rm_content is not None else []
+
                 sub_parts = self._parse_command(line.strip())
+
+                # Declare these so the flex-controller block below can reference them
+                # even when len(sub_parts) < 3.
+                is_dmx         = False
+                is_smd         = False
+                dmx_path       = None
+                final_mesh_path = None
 
                 if len(sub_parts) >= 3:
                     mesh_raw = sub_parts[2].strip('"')
-                    is_dmx = mesh_raw.lower().endswith(".dmx")
-                    is_smd = mesh_raw.lower().endswith(".smd")
-                    
+                    dmx_path = self._resolve_mesh_path(mesh_raw, base_dir)
+
+                    if not dmx_path:
+                        raise QCCompileError(f"Line {line_num}: $model could not resolve '{mesh_raw}'")
+
+                    is_dmx = dmx_path.suffix.lower() == ".dmx"
+                    is_smd = dmx_path.suffix.lower() == ".smd"
+
                     final_mesh_path = mesh_raw
-                    dmx_path = self._resolve_dmx_path(mesh_raw, base_dir)
+                    if not Path(mesh_raw).suffix.lower() in (".dmx", ".smd"):
+                        final_mesh_path += dmx_path.suffix
 
-                    # noautodmxrules 2: strip DmeCombinationInputControl elements from the DMX
-                    # and write a temp file so studiomdl never sees the flex rules.
-                    # noautodmxrules / noautodmxrules 1: passed through as plain noautodmxrules;
-                    # Studiomdl handles it natively, no DMX rewrite needed.
-                    if noautodmxrules_mode == 2 and is_dmx and dmx_path:
+                    # Combined DMX edit: noautodmxrules 2 + removemesh + visiblemesh
+                    # All three are handled in a single load-edit-write pass via _make_edited_dmx.
+                    needs_dmx_edit = (noautodmxrules_mode == 2 or vis_changes_m or del_names_m)
+                    if needs_dmx_edit and is_dmx:
                         try:
-                            orig_enc, orig_ver = "keyvalues2", 1
-                            with open(dmx_path, 'rb') as f:
-                                header_bytes = b""
-                                while not header_bytes.endswith(b">"):
-                                    char = f.read(1)
-                                    if not char: break
-                                    header_bytes += char
-                                header_str = header_bytes.decode('ascii', errors='ignore')
-
-                            matches = re.findall(datamodel.header_format_regex, header_str)
-                            if matches:
-                                orig_enc, orig_ver = matches[0][0], int(matches[0][1])
-                            else:
-                                matches = re.findall(datamodel.header_proto2_regex, header_str)
-                                if matches:
-                                    orig_enc, orig_ver = "binary_proto", int(matches[0][0])
-
-                            dm = datamodel.load(dmx_path)
-                            temp_path = dmx_path.with_name(f"{dmx_path.stem}_norules.dmx")
-
-                            REMOVE_TYPES = {
-                                "DmeCombinationInputControl",
-                                "DmeCombinationDominationRule",
-                            }
-                            to_delete = {e for e in dm.elements if e.type in REMOVE_TYPES}
-
-                            # Remove from element list first
-                            for e in to_delete:
-                                if self.logger:
-                                    self.logger.info(f"noautodmxrules 2: Removing {e.type} '{e.name}'")
-                                dm.elements.remove(e)
-
-                            # Scrub all references from surviving elements
-                            for parent in dm.elements:
-                                for attr_key in list(parent.keys()):
-                                    val = parent[attr_key]
-                                    if isinstance(val, datamodel.Element) and val in to_delete:
-                                        del parent[attr_key]
-                                    elif isinstance(val, datamodel._ElementArray):
-                                        # Array reference — strip out any deleted elements in-place
-                                        for e in to_delete:
-                                            while e in val:
-                                                val.remove(e)
-
-                            dm.write(temp_path, orig_enc, orig_ver)
-                            final_mesh_path = (Path(mesh_raw).parent / temp_path.name).as_posix()
-
+                            out_path = self._make_edited_dmx(
+                                dmx_path, vis_changes_m, del_names_m,
+                                strip_flex=(noautodmxrules_mode == 2),
+                            )
+                            orig_dir        = str(Path(mesh_raw).parent)
+                            final_mesh_path = (
+                                out_path.name if orig_dir == "."
+                                else f"{orig_dir}/{out_path.name}".replace("\\", "/")
+                            )
+                            dmx_path = out_path   # flex-controller injection reads the edited file
                         except Exception as e:
-                            if self.logger:
-                                self.logger.error(f"Line {line_num}: noautodmxrules 2 failed: {e}")
+                            raise QCCompileError(f"Line {line_num}: $model mesh edit failed: {e}")
+                    elif needs_dmx_edit and not is_dmx:
+                        self._warn(
+                            f"Line {line_num}: $model removemesh/visiblemesh requires a DMX mesh, "
+                            f"skipping edits for '{mesh_raw}'"
+                        )
 
                 # Scaling
                 if self.current_scale != 1.0 and self.compiler != "nekomdl":
@@ -994,21 +1269,16 @@ class QCProcessor:
 
                 # Flex Controllers
                 if len(sub_parts) >= 3 and is_dmx:
-                    if dmx_path:
-                        res_content, errs, count = flex_controllers.inject_flex_controllers_from_dmx(block_content, dmx_path)
+                    res_content, errs, count = flex_controllers.inject_flex_controllers_from_dmx(block_content, dmx_path)
 
-                        if final_mesh_path != mesh_raw:
-                            res_content = res_content.replace(f'"{mesh_raw}"', f'"{final_mesh_path}"', 1)
+                    if final_mesh_path != mesh_raw:
+                        res_content = res_content.replace(f'"{mesh_raw}"', f'"{final_mesh_path}"', 1)
 
-                        for err in errs:
-                            output_lines.append(f"// ERROR Line {line_num}: {err}\n")
-                        if count > 0 and self.logger:
-                            self.logger.info(f"Constructed {count} flex controllers from {dmx_path.name}")
-                        output_lines.append(res_content)
-                    else:
-                        if self.logger: self.logger.warn(f"Line {line_num}: Could not resolve DMX '{mesh_raw}'")
-                        output_lines.append(f"// WARNING Line {line_num}: Could not resolve DMX '{mesh_raw}'\n")
-                        output_lines.append(block_content)
+                    for err in errs:
+                        output_lines.append(f"// ERROR Line {line_num}: {err}\n")
+                    if count > 0 and self.logger:
+                        self.logger.info(f"Constructed {count} flex controllers from {dmx_path.name}")
+                    output_lines.append(res_content)
                 else:
                     output_lines.append(block_content)
                 continue
@@ -1120,12 +1390,79 @@ class QCProcessor:
                 continue
 
             # ----------------------------------------------------------
+            # $body — optional removemesh / visiblemesh edit blocks
+            # ----------------------------------------------------------
+
+            if command == "$body":
+                lc_parts = [p.lower() for p in parts]
+                has_vis  = "visiblemesh" in lc_parts
+                has_del  = "removemesh"  in lc_parts
+
+                if (has_vis or has_del) and len(parts) >= 3:
+                    body_name = parts[1].strip('"')
+                    mesh_raw  = parts[2].strip('"')
+
+                    # Collect everything after the mesh path token, spanning continuation lines
+                    # until brace depth is balanced.
+                    rest  = " ".join(parts[3:])
+                    depth = rest.count("{") - rest.count("}")
+                    while depth > 0 and i < len(all_lines):
+                        nxt   = all_lines[i].strip()
+                        i    += 1
+                        rest += " " + nxt
+                        depth += nxt.count("{") - nxt.count("}")
+
+                    vis_changes, del_names = [], []
+                    if has_vis:
+                        cnt = self._extract_block_content(rest, "visiblemesh")
+                        if cnt is not None:
+                            vis_changes = self._parse_mesh_vis_tokens(cnt)
+                    if has_del:
+                        cnt = self._extract_block_content(rest, "removemesh")
+                        if cnt is not None:
+                            del_names = self._parse_del_tokens(cnt)
+
+                    dmx_path = self._resolve_mesh_path(mesh_raw, base_dir)
+                    if not dmx_path:
+                        raise QCCompileError(f"Line {line_num}: $body could not resolve '{mesh_raw}'")
+
+                    # Normalise mesh path extension
+                    file_str = mesh_raw
+                    if not Path(mesh_raw).suffix.lower() in (".dmx", ".smd"):
+                        file_str += dmx_path.suffix
+
+                    if dmx_path.suffix.lower() != ".dmx":
+                        self._warn(
+                            f"Line {line_num}: $body removemesh/visiblemesh requires a DMX mesh, "
+                            f"skipping edits for '{mesh_raw}'"
+                        )
+                        output_lines.append(f'$body "{body_name}" "{file_str}"\n')
+                        continue
+
+                    try:
+                        out_path = self._make_edited_dmx(dmx_path, vis_changes, del_names)
+                    except Exception as e:
+                        raise QCCompileError(
+                            f"Line {line_num}: $body mesh edit failed for '{mesh_raw}': {e}"
+                        )
+
+                    orig_dir = str(Path(mesh_raw).parent)
+                    rel_path = (
+                        out_path.name if orig_dir == "."
+                        else f"{orig_dir}/{out_path.name}".replace("\\", "/")
+                    )
+                    output_lines.append(f'$body "{body_name}" "{rel_path}"\n')
+                    continue
+                # No edit blocks — fall through to passthrough below.
+
+            # ----------------------------------------------------------
             # $rendermeshlist — expand into $body lines
             # ----------------------------------------------------------
 
             if command == "$rendermeshlist":
                 replace_rules  = []
-                mesh_names     = []
+                # Each entry: (mesh_name, vis_changes, del_names)
+                mesh_entries: list[tuple[str, list, list]] = []
                 variants       = []
                 ignore_missing = False
 
@@ -1143,51 +1480,112 @@ class QCProcessor:
                 after_open = brace_line[brace_line.find("{") + 1:].strip()
                 depth      = 1 + after_open.count("{") - after_open.count("}")
 
-                def parse_rendermesh_tokens(tokens):
-                    nonlocal ignore_missing
-                    if not tokens:
-                        return
-                    keyword = tokens[0].lower()
-                    if keyword == "replace" and len(tokens) >= 2:
-                        replace_rules.append((tokens[1], tokens[2] if len(tokens) >= 3 else ""))
-                    elif keyword == "ignore_missing" and len(tokens) >= 2:
-                        ignore_missing = tokens[1].strip() not in ("0", "false")
-                    else:
-                        for token in tokens:
-                            if token != "}":
-                                mesh_names.append(token.strip('"'))
-
+                # Handle tokens on the same line as the opening brace.
+                # These are treated as plain directives / mesh names (no multi-line blocks here).
                 if after_open:
                     pre_close = after_open[:after_open.find("}")] if "}" in after_open else after_open
-                    parse_rendermesh_tokens(self._parse_command(pre_close))
+                    for tok in self._parse_command(pre_close):
+                        t = tok.strip('"')
+                        if not t or t == "}":
+                            continue
+                        tl = t.lower()
+                        if tl == "ignore_missing":
+                            # handled as keyword=value on its own line; treat bare presence as true
+                            ignore_missing = True
+                        elif tl not in ("replace", "suffix", "prefix", "visiblemesh", "removemesh"):
+                            mesh_entries.append((t, [], []))
 
                 if depth > 0:
                     inner_lines, i = self._collect_block(all_lines, i, depth, base_dir)
-                    for bl in inner_lines:
-                        stripped_bl = bl.strip()
-                        if stripped_bl.startswith("//"):
-                            continue
-                        toks = self._parse_command(stripped_bl)
-                        if toks and toks[0].lower() in ("suffix", "prefix") and len(toks) >= 2:
-                            variants.append((toks[0].lower(), toks[1].strip('"')))
-                        else:
-                            parse_rendermesh_tokens(toks)
 
-                for mesh_name in mesh_names:
+                    j = 0
+                    while j < len(inner_lines):
+                        bl         = inner_lines[j]
+                        stripped_bl = bl.strip()
+                        j += 1
+
+                        if not stripped_bl or stripped_bl.startswith("//") or stripped_bl == "}":
+                            continue
+
+                        toks    = self._parse_command(stripped_bl)
+                        if not toks:
+                            continue
+                        keyword = toks[0].lower()
+
+                        if keyword in ("suffix", "prefix") and len(toks) >= 2:
+                            variants.append((keyword, toks[1].strip('"')))
+                            continue
+                        if keyword == "replace" and len(toks) >= 2:
+                            replace_rules.append((toks[1], toks[2] if len(toks) >= 3 else ""))
+                            continue
+                        if keyword == "ignore_missing" and len(toks) >= 2:
+                            ignore_missing = toks[1].strip() not in ("0", "false")
+                            continue
+
+                        # Mesh entry: first token is the name; subsequent tokens may include
+                        # removemesh / visiblemesh block keywords.
+                        mesh_name = toks[0].strip('"')
+                        lc_toks   = [t.lower() for t in toks]
+                        has_vis   = "visiblemesh" in lc_toks
+                        has_del   = "removemesh"  in lc_toks
+
+                        if has_vis or has_del:
+                            # Collect rest of entry, gathering continuation lines for multi-line blocks.
+                            rest  = " ".join(toks[1:])
+                            depth2 = rest.count("{") - rest.count("}")
+                            while depth2 > 0 and j < len(inner_lines):
+                                nxt    = inner_lines[j].strip()
+                                j     += 1
+                                rest  += " " + nxt
+                                depth2 += nxt.count("{") - nxt.count("}")
+
+                            vis_changes, del_names = [], []
+                            if has_vis:
+                                cnt = self._extract_block_content(rest, "visiblemesh")
+                                if cnt is not None:
+                                    vis_changes = self._parse_mesh_vis_tokens(cnt)
+                            if has_del:
+                                cnt = self._extract_block_content(rest, "removemesh")
+                                if cnt is not None:
+                                    del_names = self._parse_del_tokens(cnt)
+                            mesh_entries.append((mesh_name, vis_changes, del_names))
+                        else:
+                            # Plain line: all tokens are mesh names (skip stray "}")
+                            for tok in toks:
+                                t = tok.strip('"')
+                                if t and t != "}":
+                                    mesh_entries.append((t, [], []))
+
+                for mesh_name, vis_changes, del_names in mesh_entries:
                     body_name = mesh_name
                     for pattern, replacement in replace_rules:
                         body_name = re.sub(pattern, replacement, body_name)
 
-                    if Path(mesh_name).suffix.lower() in (".dmx", ".smd"):
-                        file_str = mesh_name
-                        dmx_path = self._resolve_dmx_path(mesh_name, base_dir)
+                    dmx_path = self._resolve_mesh_path(mesh_name, base_dir)
+                    if dmx_path:
+                        file_str = mesh_name if Path(mesh_name).suffix.lower() in (".dmx", ".smd") else mesh_name + dmx_path.suffix
                     else:
-                        dmx_path = self._resolve_dmx_path(mesh_name + ".dmx", base_dir)
-                        if dmx_path:
-                            file_str = mesh_name + ".dmx"
+                        file_str = mesh_name + ".dmx" if not Path(mesh_name).suffix else mesh_name
+
+                    # Apply removemesh / visiblemesh edits if present
+                    if (vis_changes or del_names) and dmx_path:
+                        if dmx_path.suffix.lower() != ".dmx":
+                            self._warn(
+                                f"Line {line_num}: $rendermeshlist removemesh/visiblemesh requires a DMX mesh, "
+                                f"skipping edits for '{mesh_name}'"
+                            )
                         else:
-                            dmx_path = self._resolve_dmx_path(mesh_name + ".smd", base_dir)
-                            file_str = mesh_name + ".smd" if dmx_path else mesh_name + ".dmx"
+                            try:
+                                out_path = self._make_edited_dmx(dmx_path, vis_changes, del_names)
+                                orig_dir = str(Path(file_str).parent)
+                                file_str = (
+                                    out_path.name if orig_dir == "."
+                                    else f"{orig_dir}/{out_path.name}".replace("\\", "/")
+                                )
+                            except Exception as e:
+                                raise QCCompileError(
+                                    f"Line {line_num}: $rendermeshlist mesh edit failed for '{mesh_name}': {e}"
+                                )
 
                     if not dmx_path:
                         if ignore_missing:
@@ -1201,6 +1599,7 @@ class QCProcessor:
 
                     output_lines.append(f'$body "{body_name}" "{file_str}"\n')
 
+                    # Variants intentionally do not inherit removemesh / visiblemesh edits.
                     for vtype, vstring in variants:
                         p = Path(file_str)
                         if vtype == "suffix":
@@ -1210,13 +1609,41 @@ class QCProcessor:
                             var_body = vstring + body_name
                             var_file = str(p.with_name(vstring + p.stem + p.suffix)).replace("\\", "/")
 
-                        if ignore_missing and not self._resolve_dmx_path(var_file, base_dir):
+                        if ignore_missing and not self._resolve_mesh_path(var_file, base_dir):
                             if self.logger: self.logger.warn(f"Line {line_num}: $rendermeshlist variant '{var_file}' not found, skipping")
                             output_lines.append(f"// WARNING: variant '{var_file}' not found\n")
                             output_lines.append(f'// $body "{var_body}" "{var_file}"\n')
                         else:
                             output_lines.append(f'$body "{var_body}" "{var_file}"\n')
 
+                continue
+
+            # ----------------------------------------------------------
+            # $bodygroup — handle studio ... visiblemesh { } / removemesh { } sub-blocks
+            # ----------------------------------------------------------
+
+            if command == "$bodygroup":
+                if "{" in line:
+                    brace_line = line
+                elif i < len(all_lines) and "{" in all_lines[i]:
+                    brace_line = all_lines[i]
+                    i += 1
+                else:
+                    output_lines.append(line)
+                    continue
+
+                depth = brace_line.count("{") - brace_line.count("}")
+                if depth > 0:
+                    inner_lines, i = self._collect_block(all_lines, i, depth, base_dir)
+                else:
+                    inner_lines = []
+
+                new_body = self._process_bodygroup_studio_lines(inner_lines, base_dir, line_num)
+
+                output_lines.append(line)
+                if "{" not in line:
+                    output_lines.append(brace_line if brace_line.endswith("\n") else brace_line + "\n")
+                output_lines.extend(new_body)
                 continue
 
             # ----------------------------------------------------------
@@ -1311,7 +1738,7 @@ def process_qc_file(
                             current_scale=_current_scale,
                             compiler=compiler,
                             vrd_prefix=vrd_prefix)
-    
+
     processor.defined_vars  = _defined_vars
     processor.pushd_stack   = _pushd_stack
     processor.vrd_name_counts = _vrd_name_counts if _vrd_name_counts is not None else {}
