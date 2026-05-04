@@ -365,6 +365,7 @@ class QCProcessor:
         vis_changes: list,
         del_names: list,
         strip_flex: bool = False,
+        keep_names: list = None,
     ) -> Path:
         """
         Apply visibility changes, mesh deletions, and/or flex-rule stripping to
@@ -383,6 +384,8 @@ class QCProcessor:
             key_parts.append("vis:" + ",".join(f"{n}={v}" for n, v in vis_changes))
         if del_names:
             key_parts.append("del:" + ",".join(del_names))
+        if keep_names:
+            key_parts.append("keep:" + ",".join(keep_names))
         crc      = zlib.crc32("|".join(key_parts).encode()) & 0xFFFFFFFF
         out_path = dmx_path.parent / f"{dmx_path.stem}_{crc:08x}.dmx"
 
@@ -409,6 +412,14 @@ class QCProcessor:
 
         dm       = datamodel.load(str(dmx_path))
         mesh_map = {e.name: e for e in dm.elements if e.type == "DmeMesh"}
+
+        # ---- inverse deletion (keep only) -------------------------------
+        if keep_names is not None:
+            if not keep_names:
+                raise QCCompileError(f"keeponlymesh block is empty for '{dmx_path.name}'. Operation aborted to avoid empty mesh.")
+            for m_name in mesh_map:
+                if m_name not in keep_names and m_name not in del_names:
+                    del_names.append(m_name)
 
         # ---- visibility changes -----------------------------------------
         for mesh_name, visible in vis_changes:
@@ -574,7 +585,8 @@ class QCProcessor:
             lc = [t.lower() for t in tokens]
             has_vis = "visiblemesh" in lc
             has_del = "removemesh"  in lc
-            if not has_vis and not has_del:
+            has_kom = "keeponlymesh" in lc
+            if not has_vis and not has_del and not has_kom:
                 out.append(raw)
                 continue
 
@@ -592,6 +604,7 @@ class QCProcessor:
 
             vis_changes = []
             del_names   = []
+            keep_names  = None
 
             if has_vis:
                 content = self._extract_block_content(rest, "visiblemesh")
@@ -603,7 +616,12 @@ class QCProcessor:
                 if content is not None:
                     del_names = self._parse_del_tokens(content)
 
-            if not vis_changes and not del_names:
+            if has_kom:
+                content = self._extract_block_content(rest, "keeponlymesh")
+                if content is not None:
+                    keep_names = self._parse_del_tokens(content)
+
+            if not vis_changes and not del_names and keep_names is None:
                 out.append(f'studio "{studio_path_raw}"\n')
                 continue
 
@@ -625,7 +643,7 @@ class QCProcessor:
                 continue
 
             try:
-                out_path = self._make_edited_dmx(dmx_path, vis_changes, del_names)
+                out_path = self._make_edited_dmx(dmx_path, vis_changes, del_names, keep_names=keep_names)
             except Exception as e:
                 raise QCCompileError(
                     f"Line {line_num}: bodygroup studio: failed for '{studio_path_raw}': {e}"
@@ -1192,8 +1210,10 @@ class QCProcessor:
                 # Both must be stripped regardless of whether the mesh is a DMX.
                 rm_content,   block_content = self._strip_block(block_content, "removemesh")
                 vm_content,   block_content = self._strip_block(block_content, "visiblemesh")
+                kom_content,  block_content = self._strip_block(block_content, "keeponlymesh")
                 vis_changes_m = self._parse_mesh_vis_tokens(vm_content) if vm_content is not None else []
                 del_names_m   = self._parse_del_tokens(rm_content)      if rm_content is not None else []
+                keep_names_m  = self._parse_del_tokens(kom_content)     if kom_content is not None else None
 
                 sub_parts = self._parse_command(line.strip())
 
@@ -1220,12 +1240,13 @@ class QCProcessor:
 
                     # Combined DMX edit: noautodmxrules 2 + removemesh + visiblemesh
                     # All three are handled in a single load-edit-write pass via _make_edited_dmx.
-                    needs_dmx_edit = (noautodmxrules_mode == 2 or vis_changes_m or del_names_m)
+                    needs_dmx_edit = (noautodmxrules_mode == 2 or vis_changes_m or del_names_m or keep_names_m is not None)
                     if needs_dmx_edit and is_dmx:
                         try:
                             out_path = self._make_edited_dmx(
                                 dmx_path, vis_changes_m, del_names_m,
                                 strip_flex=(noautodmxrules_mode == 2),
+                                keep_names=keep_names_m,
                             )
                             orig_dir        = str(Path(mesh_raw).parent)
                             final_mesh_path = (
@@ -1374,7 +1395,7 @@ class QCProcessor:
                                 output_lines.append(
                                     f'$definebone "{bone_name}" {parent} '
                                     f'{x:.6f} {y:.6f} {z:.6f} '
-                                    f'{rx:.6f} {ry:.6f} {rz:.6f} '
+                                    f'{ry:.6f} {rz:.6f} {rx:.6f} '
                                     f'0 0 0 0 0 0\n'
                                 )
                             else:
@@ -1397,8 +1418,9 @@ class QCProcessor:
                 lc_parts = [p.lower() for p in parts]
                 has_vis  = "visiblemesh" in lc_parts
                 has_del  = "removemesh"  in lc_parts
+                has_kom  = "keeponlymesh" in lc_parts
 
-                if (has_vis or has_del) and len(parts) >= 3:
+                if (has_vis or has_del or has_kom) and len(parts) >= 3:
                     body_name = parts[1].strip('"')
                     mesh_raw  = parts[2].strip('"')
 
@@ -1412,7 +1434,7 @@ class QCProcessor:
                         rest += " " + nxt
                         depth += nxt.count("{") - nxt.count("}")
 
-                    vis_changes, del_names = [], []
+                    vis_changes, del_names, keep_names = [], [], None
                     if has_vis:
                         cnt = self._extract_block_content(rest, "visiblemesh")
                         if cnt is not None:
@@ -1421,6 +1443,10 @@ class QCProcessor:
                         cnt = self._extract_block_content(rest, "removemesh")
                         if cnt is not None:
                             del_names = self._parse_del_tokens(cnt)
+                    if has_kom:
+                        cnt = self._extract_block_content(rest, "keeponlymesh")
+                        if cnt is not None:
+                            keep_names = self._parse_del_tokens(cnt)
 
                     dmx_path = self._resolve_mesh_path(mesh_raw, base_dir)
                     if not dmx_path:
@@ -1440,7 +1466,7 @@ class QCProcessor:
                         continue
 
                     try:
-                        out_path = self._make_edited_dmx(dmx_path, vis_changes, del_names)
+                        out_path = self._make_edited_dmx(dmx_path, vis_changes, del_names, keep_names=keep_names)
                     except Exception as e:
                         raise QCCompileError(
                             f"Line {line_num}: $body mesh edit failed for '{mesh_raw}': {e}"
@@ -1461,8 +1487,8 @@ class QCProcessor:
 
             if command == "$rendermeshlist":
                 replace_rules  = []
-                # Each entry: (mesh_name, vis_changes, del_names)
-                mesh_entries: list[tuple[str, list, list]] = []
+                # Each entry: (mesh_name, vis_changes, del_names, keep_names)
+                mesh_entries: list[tuple[str, list, list, list | None]] = []
                 variants       = []
                 ignore_missing = False
 
@@ -1492,8 +1518,8 @@ class QCProcessor:
                         if tl == "ignore_missing":
                             # handled as keyword=value on its own line; treat bare presence as true
                             ignore_missing = True
-                        elif tl not in ("replace", "suffix", "prefix", "visiblemesh", "removemesh"):
-                            mesh_entries.append((t, [], []))
+                        elif tl not in ("replace", "suffix", "prefix", "visiblemesh", "removemesh", "keeponlymesh"):
+                            mesh_entries.append((t, [], [], None))
 
                 if depth > 0:
                     inner_lines, i = self._collect_block(all_lines, i, depth, base_dir)
@@ -1528,8 +1554,9 @@ class QCProcessor:
                         lc_toks   = [t.lower() for t in toks]
                         has_vis   = "visiblemesh" in lc_toks
                         has_del   = "removemesh"  in lc_toks
+                        has_kom   = "keeponlymesh" in lc_toks
 
-                        if has_vis or has_del:
+                        if has_vis or has_del or has_kom:
                             # Collect rest of entry, gathering continuation lines for multi-line blocks.
                             rest  = " ".join(toks[1:])
                             depth2 = rest.count("{") - rest.count("}")
@@ -1539,7 +1566,7 @@ class QCProcessor:
                                 rest  += " " + nxt
                                 depth2 += nxt.count("{") - nxt.count("}")
 
-                            vis_changes, del_names = [], []
+                            vis_changes, del_names, keep_names = [], [], None
                             if has_vis:
                                 cnt = self._extract_block_content(rest, "visiblemesh")
                                 if cnt is not None:
@@ -1548,15 +1575,19 @@ class QCProcessor:
                                 cnt = self._extract_block_content(rest, "removemesh")
                                 if cnt is not None:
                                     del_names = self._parse_del_tokens(cnt)
-                            mesh_entries.append((mesh_name, vis_changes, del_names))
+                            if has_kom:
+                                cnt = self._extract_block_content(rest, "keeponlymesh")
+                                if cnt is not None:
+                                    keep_names = self._parse_del_tokens(cnt)
+                            mesh_entries.append((mesh_name, vis_changes, del_names, keep_names))
                         else:
                             # Plain line: all tokens are mesh names (skip stray "}")
                             for tok in toks:
                                 t = tok.strip('"')
                                 if t and t != "}":
-                                    mesh_entries.append((t, [], []))
+                                    mesh_entries.append((t, [], [], None))
 
-                for mesh_name, vis_changes, del_names in mesh_entries:
+                for mesh_name, vis_changes, del_names, keep_names in mesh_entries:
                     body_name = mesh_name
                     for pattern, replacement in replace_rules:
                         body_name = re.sub(pattern, replacement, body_name)
@@ -1568,15 +1599,15 @@ class QCProcessor:
                         file_str = mesh_name + ".dmx" if not Path(mesh_name).suffix else mesh_name
 
                     # Apply removemesh / visiblemesh edits if present
-                    if (vis_changes or del_names) and dmx_path:
+                    if (vis_changes or del_names or keep_names is not None) and dmx_path:
                         if dmx_path.suffix.lower() != ".dmx":
                             self._warn(
-                                f"Line {line_num}: $rendermeshlist removemesh/visiblemesh requires a DMX mesh, "
+                                f"Line {line_num}: $rendermeshlist edit blocks require a DMX mesh, "
                                 f"skipping edits for '{mesh_name}'"
                             )
                         else:
                             try:
-                                out_path = self._make_edited_dmx(dmx_path, vis_changes, del_names)
+                                out_path = self._make_edited_dmx(dmx_path, vis_changes, del_names, keep_names=keep_names)
                                 orig_dir = str(Path(file_str).parent)
                                 file_str = (
                                     out_path.name if orig_dir == "."
