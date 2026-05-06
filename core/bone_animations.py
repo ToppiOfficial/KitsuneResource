@@ -196,50 +196,107 @@ def read_smd_bone_animation(filepath: str, target_bone: str | None = None) -> Bo
 def read_dmx_bone_animation(filepath: str, target_bone: str | None = None) -> BoneFrameData:
     dm = datamodel.load(filepath)
 
+    def _is_joint(elem) -> bool:
+        """True for skeleton joints; False for mesh/attachment container DmeDags."""
+        if elem.type == "DmeJoint":
+            return True
+        if elem.type == "DmeDag":
+            shape = elem.get("shape")
+            # DmeDag with no shape (older format bones) or with a non-mesh shape is a joint.
+            return shape is None or shape.type not in ("DmeMesh", "DmeAttachment")
+        return "Joint" in elem.type
+
+    def _find_model():
+        # Prefer "skeleton" so we find the model in both mesh and animation DMX.
+        for key in ("skeleton", "model"):
+            m = dm.root.get(key)
+            if m is not None:
+                return m
+        for e in dm.elements:
+            if e.type == "DmeModel":
+                return e
+        return None
+
+    def _read_trfm(trfm) -> tuple:
+        pos = trfm.get("position", (0.0, 0.0, 0.0))
+        ori = trfm.get("orientation", (0.0, 0.0, 0.0, 1.0))
+        return (
+            (float(pos[0]), float(pos[1]), float(pos[2])),
+            (float(ori[0]), float(ori[1]), float(ori[2]), float(ori[3])),
+        )
+
+    def _walk(joint, parent_name, pmap, tmap, imap):
+        """Recursively populate parent map, transform map and id→name map."""
+        for child in joint.get("children", []):
+            if not _is_joint(child):
+                continue
+            pmap[child.name] = parent_name
+            trfm = child.get("transform")
+            if trfm is not None:
+                if imap is not None:
+                    imap[trfm.id] = child.name
+                if tmap is not None:
+                    tmap[child.name] = _read_trfm(trfm)
+            _walk(child, child.name, pmap, tmap, imap)
+
+    # -------------------------------------------------------------------------
+    # Mesh / skeleton DMX — return a single rest-pose frame
+    # -------------------------------------------------------------------------
     if not dm.root.get("animationList"):
         parent_map: dict[str, str | None] = {}
         base_transforms: dict[str, tuple] = {}
 
-        def _walk_joints(joint, parent_name):
-            for child in joint.get("children", []):
-                if child.type in ("DmeJoint", "DmeDag") or "Joint" in child.type:
-                    parent_map[child.name] = parent_name
-                    trfm = child.get("transform")
-                    if trfm is not None:
-                        pos = trfm.get("position", (0.0, 0.0, 0.0))
-                        ori = trfm.get("orientation", (0.0, 0.0, 0.0, 1.0))
-                        base_transforms[child.name] = (
-                            (pos[0], pos[1], pos[2]),
-                            (ori[0], ori[1], ori[2], ori[3]),
-                        )
-                    _walk_joints(child, child.name)
-
-        DmeModel = dm.root.get("model") or dm.root.get("skeleton")
+        DmeModel = _find_model()
         if not DmeModel:
             return []
 
-        # Check for baseStates first, fall back to live transforms
+        # Always walk the hierarchy first so parent_map is fully populated.
+        for root_joint in DmeModel.get("children", []):
+            if not _is_joint(root_joint):
+                continue
+            parent_map[root_joint.name] = None
+            trfm = root_joint.get("transform")
+            if trfm is not None:
+                base_transforms[root_joint.name] = _read_trfm(trfm)
+            _walk(root_joint, root_joint.name, parent_map, base_transforms, None)
+
+        # Supplement with jointList for bones missed by the hierarchy walk
+        # (format >= 11 includes a flat jointList alongside the child hierarchy).
+        joint_list = DmeModel.get("jointList")
+        if joint_list:
+            for joint in joint_list:
+                if joint is DmeModel or not _is_joint(joint) or joint.name in parent_map:
+                    continue
+                parent_map[joint.name] = None
+                trfm = joint.get("transform")
+                if trfm is not None:
+                    base_transforms[joint.name] = _read_trfm(trfm)
+
+        # Override live transforms with baseStates if present (authoritative rest pose).
+        # Filter to joints already in parent_map to exclude mesh-dag transforms that
+        # also live in the same DmeTransformList on older format versions.
         base_states = DmeModel.get("baseStates")
         if base_states and len(base_states) > 0:
+            known = set(parent_map) if parent_map else None  # None → no filter (fallback)
             for trfm in base_states[0].get("transforms", []):
+                if known is not None and trfm.name not in known:
+                    continue
                 base_transforms[trfm.name] = (
-                    tuple(trfm.get("position", (0.0, 0.0, 0.0)))[:3],
-                    tuple(trfm.get("orientation", (0.0, 0.0, 0.0, 1.0)))[:4],
+                    tuple(float(v) for v in trfm.get("position", (0.0, 0.0, 0.0)))[:3],
+                    tuple(float(v) for v in trfm.get("orientation", (0.0, 0.0, 0.0, 1.0)))[:4],
                 )
-        else:
-            for root_joint in DmeModel.get("children", []):
-                parent_map[root_joint.name] = None
-                _walk_joints(root_joint, root_joint.name)
 
         frame: list[BoneTransform] = []
         for bone_name, (pos, ori) in base_transforms.items():
             if target_bone is not None and bone_name != target_bone:
                 continue
-            parent_name = parent_map.get(bone_name)
-            frame.append(BoneTransform(bone_name, parent_name, pos, ori))
+            frame.append(BoneTransform(bone_name, parent_map.get(bone_name), pos, ori))
 
-        return [frame]
+        return [frame] if frame else []
 
+    # -------------------------------------------------------------------------
+    # Animation DMX
+    # -------------------------------------------------------------------------
     animation = dm.root["animationList"]["animations"][0]
     frame_rate = animation.get("frameRate", 30)
     time_frame = animation["timeFrame"]
@@ -251,26 +308,31 @@ def read_dmx_bone_animation(filepath: str, target_bone: str | None = None) -> Bo
 
     total_frames = max(1, round(float(duration) * frame_rate) + 1)
 
-    parent_map: dict[str, str | None] = {}           # bone_name -> parent_name
-    transform_id_map: dict[any, str] = {}             # DmeTransform.id -> bone_name
+    parent_map: dict[str, str | None] = {}
+    transform_id_map: dict[any, str] = {}   # DmeTransform.id → bone_name
 
-    def _walk_joints(joint, parent_name):
-        for child in joint.get("children", []):
-            if child.type in ("DmeJoint", "DmeDag") or "Joint" in child.type:
-                parent_map[child.name] = parent_name
-                trfm = child.get("transform")
-                if trfm is not None:
-                    transform_id_map[trfm.id] = child.name
-                _walk_joints(child, child.name)
-
-    DmeModel = dm.root.get("model") or dm.root.get("skeleton")
+    DmeModel = _find_model()
     if DmeModel:
         for root_joint in DmeModel.get("children", []):
+            if not _is_joint(root_joint):
+                continue
             parent_map[root_joint.name] = None
             trfm = root_joint.get("transform")
             if trfm is not None:
                 transform_id_map[trfm.id] = root_joint.name
-            _walk_joints(root_joint, root_joint.name)
+            _walk(root_joint, root_joint.name, parent_map, None, transform_id_map)
+
+        # Supplement with jointList for any bones not reached via the hierarchy walk.
+        joint_list = DmeModel.get("jointList")
+        if joint_list:
+            for joint in joint_list:
+                if joint is DmeModel or not _is_joint(joint):
+                    continue
+                trfm = joint.get("transform")
+                if trfm is not None and trfm.id not in transform_id_map:
+                    transform_id_map[trfm.id] = joint.name
+                    if joint.name not in parent_map:
+                        parent_map[joint.name] = None
 
     bone_channels: dict[str, dict[str, dict[int, any]]] = {}
 
@@ -279,7 +341,7 @@ def read_dmx_bone_animation(filepath: str, target_bone: str | None = None) -> Bo
         if not to_element:
             continue
 
-        # resolve bone name: try transform id map first, fall back to element name
+        # Resolve bone name: prefer the id map (precise), fall back to element name.
         bone_name = transform_id_map.get(to_element.id) or to_element.name
         if not bone_name:
             continue
@@ -325,4 +387,3 @@ def read_dmx_bone_animation(filepath: str, target_bone: str | None = None) -> Bo
             frames[frame_index].append(BoneTransform(bone_name, parent_name, last_pos, last_quat))
 
     return frames
-

@@ -362,26 +362,29 @@ class QCProcessor:
     def _make_edited_dmx(
         self,
         dmx_path: Path,
-        vis_changes: list,
         del_names: list,
         strip_flex: bool = False,
         keep_names: list = None,
     ) -> Path:
         """
-        Apply visibility changes, mesh deletions, and/or flex-rule stripping to
+        Apply mesh deletions and/or flex-rule stripping to
         *dmx_path* in a single load-edit-write pass.
 
         The output filename uses a CRC-32 hex suffix derived from the combined
         edit set so that identical edits always produce the same file and
         different combinations never collide.  The file is written alongside
         the source DMX.
+
+        Deletion is deep: every element that is exclusively reachable from a
+        condemned DmeMesh (vertex data, face sets, delta states, base-state
+        transform copies, etc.) is collected via a reference-count walk before
+        anything is removed, so studiomdl never sees unreferenced/leaked
+        elements regardless of DMX format version.
         """
         import zlib
         key_parts: list[str] = []
         if strip_flex:
             key_parts.append("norules")
-        if vis_changes:
-            key_parts.append("vis:" + ",".join(f"{n}={v}" for n, v in vis_changes))
         if del_names:
             key_parts.append("del:" + ",".join(del_names))
         if keep_names:
@@ -389,7 +392,7 @@ class QCProcessor:
         crc      = zlib.crc32("|".join(key_parts).encode()) & 0xFFFFFFFF
         out_path = dmx_path.parent / f"{dmx_path.stem}_{crc:08x}.dmx"
 
-        # ---- sniff original encoding / version --------------------------
+        # ---- sniff original encoding / version ----------------------------------
         orig_enc, orig_ver = "keyvalues2", 1
         try:
             with open(dmx_path, "rb") as fh:
@@ -413,27 +416,65 @@ class QCProcessor:
         dm       = datamodel.load(str(dmx_path))
         mesh_map = {e.name: e for e in dm.elements if e.type == "DmeMesh"}
 
-        # ---- inverse deletion (keep only) -------------------------------
+        # ---- inverse deletion (keep only) ---------------------------------------
         if keep_names is not None:
             if not keep_names:
-                raise QCCompileError(f"keeponlymesh block is empty for '{dmx_path.name}'. Operation aborted to avoid empty mesh.")
-            for m_name in mesh_map:
-                if m_name not in keep_names and m_name not in del_names:
-                    del_names.append(m_name)
-
-        # ---- visibility changes -----------------------------------------
-        for mesh_name, visible in vis_changes:
-            elem = mesh_map.get(mesh_name)
-            if elem is not None:
-                elem["visible"] = bool(visible)
-            elif self.logger:
-                self.logger.warn(
-                    f"visiblemesh: DmeMesh '{mesh_name}' not found in '{dmx_path.name}'"
+                raise QCCompileError(
+                    f"keeponlymesh block is empty for '{dmx_path.name}'. Operation aborted to avoid empty mesh."
                 )
+            for m_name in list(mesh_map):
+                if m_name not in keep_names and m_name not in del_names:
+                    del_names = list(del_names) + [m_name]
 
-        # ---- mesh deletions ---------------------------------------------
+        # ---- mesh deletions (deep, leak-free) -----------------------------------
         if del_names:
-            to_delete: set = set()
+            # Build a reference-count map: how many *surviving* elements point to
+            # each element.  Elements with ref-count 0 after the initial condemned
+            # set is seeded can be collected transitively.
+            #
+            # We do this in two phases:
+            #   1. Seed the condemned set with the top-level DmeMesh elements and
+            #      their directly owned DmeDag / DmeTransform siblings.
+            #   2. Flood-fill: any element whose every in-edge comes from inside
+            #      the condemned set is also condemned.
+            #
+            # "In-edge" means: some attribute of some *other* element holds a
+            # direct reference (Element) or array-reference (_ElementArray) to it.
+
+            def _iter_refs(elem):
+                """Yield all Element objects directly referenced by *elem*'s attrs."""
+                for key in elem.keys():
+                    val = elem[key]
+                    if isinstance(val, datamodel.Element):
+                        yield val
+                    elif isinstance(val, datamodel._ElementArray):
+                        for v in val:
+                            if isinstance(v, datamodel.Element):
+                                yield v
+
+            # refcount[id] = number of elements outside condemned set that point to it
+            all_ids   = {e.id: e for e in dm.elements}
+            refcount  = {e.id: 0 for e in dm.elements}
+            for elem in dm.elements:
+                for ref in _iter_refs(elem):
+                    if ref.id in refcount:
+                        refcount[ref.id] += 1
+
+            condemned: set = set()
+
+            def _condemn(elem):
+                if elem in condemned:
+                    return
+                condemned.add(elem)
+                # Decrement refcounts for everything this element points to;
+                # if any drop to 0 and belong to dm.elements, they become condemned too.
+                for ref in _iter_refs(elem):
+                    if ref.id not in refcount:
+                        continue
+                    refcount[ref.id] -= 1
+                    if refcount[ref.id] <= 0:
+                        _condemn(all_ids[ref.id])
+
             for mesh_name in del_names:
                 mesh_elem = mesh_map.get(mesh_name)
                 if mesh_elem is None:
@@ -442,29 +483,40 @@ class QCProcessor:
                             f"removemesh: DmeMesh '{mesh_name}' not found in '{dmx_path.name}'"
                         )
                     continue
-                to_delete.add(mesh_elem)
+
+                # Seed: the mesh itself
+                _condemn(mesh_elem)
+
+                # Seed: DmeDag containers that wrap this mesh, and their transforms.
+                # These exist in all format versions and must be removed together with
+                # the mesh; their DmeTransform sibling in baseStates is handled by
+                # the refcount walk above.
                 for e in dm.elements:
                     if e.type == "DmeDag" and e.get("shape") == mesh_elem:
-                        to_delete.add(e)
-                        transform = e.get("transform")
-                        if isinstance(transform, datamodel.Element):
-                            to_delete.add(transform)
+                        _condemn(e)
+                        trfm = e.get("transform")
+                        if isinstance(trfm, datamodel.Element):
+                            _condemn(trfm)
                     elif e.name == mesh_name and e.type in ("DmeDag", "DmeTransform"):
-                        to_delete.add(e)
-            for e in to_delete:
+                        _condemn(e)
+
+            # ---- remove condemned elements from dm.elements ---------------------
+            for e in condemned:
                 if e in dm.elements:
                     dm.elements.remove(e)
+
+            # ---- scrub all surviving attribute references to condemned elements --
             for parent in dm.elements:
                 for attr_key in list(parent.keys()):
                     val = parent[attr_key]
-                    if isinstance(val, datamodel.Element) and val in to_delete:
+                    if isinstance(val, datamodel.Element) and val in condemned:
                         del parent[attr_key]
                     elif isinstance(val, datamodel._ElementArray):
-                        for e in to_delete:
+                        for e in list(condemned):
                             while e in val:
                                 val.remove(e)
 
-        # ---- strip flex rules (noautodmxrules 2) ------------------------
+        # ---- strip flex rules (noautodmxrules 2) --------------------------------
         if strip_flex:
             REMOVE_TYPES = {"DmeCombinationInputControl", "DmeCombinationDominationRule"}
             flex_delete  = {e for e in dm.elements if e.type in REMOVE_TYPES}
@@ -519,20 +571,6 @@ class QCProcessor:
     # Bodygroup handler
     # ------------------------------------------------------------------
 
-    def _parse_mesh_vis_tokens(self, content: str) -> list[tuple[str, int]]:
-        """Parse '"name1" 0 "name2" "name3" 1' into [(name1,0),(name2,1),(name3,1)]."""
-        tokens = self._parse_command(content.strip())
-        result, pending = [], []
-        for tok in tokens:
-            t = tok.strip('"')
-            if t in ("0", "1"):
-                for name in pending:
-                    result.append((name, int(t)))
-                pending = []
-            else:
-                pending.append(t)
-        return result
-
     def _parse_del_tokens(self, content: str) -> list[str]:
         """Parse mesh names from a removemesh { } block content."""
         return [t.strip('"') for t in self._parse_command(content.strip()) if t.strip('"')]
@@ -583,10 +621,9 @@ class QCProcessor:
                 continue
 
             lc = [t.lower() for t in tokens]
-            has_vis = "visiblemesh" in lc
             has_del = "removemesh"  in lc
             has_kom = "keeponlymesh" in lc
-            if not has_vis and not has_del and not has_kom:
+            if not has_del and not has_kom:
                 out.append(raw)
                 continue
 
@@ -602,14 +639,8 @@ class QCProcessor:
                 rest += " " + nxt
                 depth += nxt.count("{") - nxt.count("}")
 
-            vis_changes = []
             del_names   = []
             keep_names  = None
-
-            if has_vis:
-                content = self._extract_block_content(rest, "visiblemesh")
-                if content is not None:
-                    vis_changes = self._parse_mesh_vis_tokens(content)
 
             if has_del:
                 content = self._extract_block_content(rest, "removemesh")
@@ -621,7 +652,7 @@ class QCProcessor:
                 if content is not None:
                     keep_names = self._parse_del_tokens(content)
 
-            if not vis_changes and not del_names and keep_names is None:
+            if not del_names and keep_names is None:
                 out.append(f'studio "{studio_path_raw}"\n')
                 continue
 
@@ -643,7 +674,7 @@ class QCProcessor:
                 continue
 
             try:
-                out_path = self._make_edited_dmx(dmx_path, vis_changes, del_names, keep_names=keep_names)
+                out_path = self._make_edited_dmx(dmx_path, del_names, keep_names=keep_names)
             except Exception as e:
                 raise QCCompileError(
                     f"Line {line_num}: bodygroup studio: failed for '{studio_path_raw}': {e}"
@@ -790,7 +821,7 @@ class QCProcessor:
 
     def _parse_driverlookatbone_block(self, all_lines: list, start: int) -> tuple[dict | None, int]:
         result = {
-            "pose": None, "frame": 0,
+            "pose": None, "frame": 0, "usebone": None,
             "aimvector": (0.0, 0.0, 0.0), "upvector": (0.0, 0.0, 0.0),
             "location":  (0.0, 0.0, 0.0), "rotation": (0.0, 0.0, 0.0),
             "helper_bones": []
@@ -821,6 +852,8 @@ class QCProcessor:
                 result["pose"] = tokens[1]
             elif keyword == "frame" and len(tokens) >= 2:
                 result["frame"] = int(tokens[1])
+            elif keyword == "usebone":
+                result["usebone"] = tokens[1].strip('"') if len(tokens) >= 2 else "1"
             elif keyword == "aimvector" and len(tokens) >= 4:
                 result["aimvector"] = (float(tokens[1]), float(tokens[2]), float(tokens[3]))
             elif keyword == "upvector" and len(tokens) >= 4:
@@ -1154,17 +1187,24 @@ class QCProcessor:
                 pose_base       = self.pushd_stack[-1] if self.pushd_stack else self.root_dir
                 stripped_target = target_bone.split(".")[-1]
                 loc, rot        = block["location"], block["rotation"]
-                existing        = new_lookat_attachments.get(stripped_target, [])
-                attachment_name = next((n for l, r, n in existing if l == loc and r == rot), None)
+                use_bone        = block.get("usebone")
 
-                if attachment_name is None:
-                    base            = f"{stripped_target}_lookattarget"
-                    attachment_name = base if not existing else f"{base}_{len(existing)}"
-                    existing.append((loc, rot, attachment_name))
-                    new_lookat_attachments[stripped_target] = existing
-                    pos_str = " ".join(f"{v:g}" for v in loc)
-                    rot_str = " ".join(f"{v:g}" for v in rot)
-                    output_lines.append(f'$attachment "{attachment_name}" "{target_bone}" {pos_str} rotate {rot_str}\n')
+                if use_bone == "1":
+                    attachment_name = stripped_target
+                elif use_bone:
+                    attachment_name = use_bone.split(".")[-1]
+                else:
+                    existing        = new_lookat_attachments.get(stripped_target, [])
+                    attachment_name = next((n for l, r, n in existing if l == loc and r == rot), None)
+
+                    if attachment_name is None:
+                        base            = f"{stripped_target}_lookattarget"
+                        attachment_name = base if not existing else f"{base}_{len(existing)}"
+                        existing.append((loc, rot, attachment_name))
+                        new_lookat_attachments[stripped_target] = existing
+                        pos_str = " ".join(f"{v:g}" for v in loc)
+                        rot_str = " ".join(f"{v:g}" for v in rot)
+                        output_lines.append(f'$attachment "{attachment_name}" "{target_bone}" {pos_str} rotate {rot_str}\n')
 
                 try:
                     vrd_module.generate_lookat_vrd(
@@ -1206,12 +1246,10 @@ class QCProcessor:
                 elif noautodmxrules_mode == 2:
                     block_content = re.sub(r'(?i)[ \t]*\bnoautodmxrules(?:\s+\d+)?[ \t]*\n?', '', block_content)
 
-                # Extract removemesh / visiblemesh from block before studiomdl sees it.
-                # Both must be stripped regardless of whether the mesh is a DMX.
+                # Extract removemesh from block before studiomdl sees it.
+                # Commands must be stripped regardless of whether the mesh is a DMX.
                 rm_content,   block_content = self._strip_block(block_content, "removemesh")
-                vm_content,   block_content = self._strip_block(block_content, "visiblemesh")
                 kom_content,  block_content = self._strip_block(block_content, "keeponlymesh")
-                vis_changes_m = self._parse_mesh_vis_tokens(vm_content) if vm_content is not None else []
                 del_names_m   = self._parse_del_tokens(rm_content)      if rm_content is not None else []
                 keep_names_m  = self._parse_del_tokens(kom_content)     if kom_content is not None else None
 
@@ -1231,6 +1269,7 @@ class QCProcessor:
                     if not dmx_path:
                         raise QCCompileError(f"Line {line_num}: $model could not resolve '{mesh_raw}'")
 
+                    source_dmx_path = dmx_path
                     is_dmx = dmx_path.suffix.lower() == ".dmx"
                     is_smd = dmx_path.suffix.lower() == ".smd"
 
@@ -1238,13 +1277,13 @@ class QCProcessor:
                     if not Path(mesh_raw).suffix.lower() in (".dmx", ".smd"):
                         final_mesh_path += dmx_path.suffix
 
-                    # Combined DMX edit: noautodmxrules 2 + removemesh + visiblemesh
+                    # Combined DMX edit: noautodmxrules 2 + removemesh
                     # All three are handled in a single load-edit-write pass via _make_edited_dmx.
-                    needs_dmx_edit = (noautodmxrules_mode == 2 or vis_changes_m or del_names_m or keep_names_m is not None)
+                    needs_dmx_edit = (noautodmxrules_mode == 2 or del_names_m or keep_names_m is not None)
                     if needs_dmx_edit and is_dmx:
                         try:
                             out_path = self._make_edited_dmx(
-                                dmx_path, vis_changes_m, del_names_m,
+                                dmx_path, del_names_m,
                                 strip_flex=(noautodmxrules_mode == 2),
                                 keep_names=keep_names_m,
                             )
@@ -1290,7 +1329,7 @@ class QCProcessor:
 
                 # Flex Controllers
                 if len(sub_parts) >= 3 and is_dmx:
-                    res_content, errs, count = flex_controllers.inject_flex_controllers_from_dmx(block_content, dmx_path)
+                    res_content, errs, count = flex_controllers.inject_flex_controllers_from_dmx(block_content, source_dmx_path)
 
                     if final_mesh_path != mesh_raw:
                         res_content = res_content.replace(f'"{mesh_raw}"', f'"{final_mesh_path}"', 1)
@@ -1416,11 +1455,10 @@ class QCProcessor:
 
             if command == "$body":
                 lc_parts = [p.lower() for p in parts]
-                has_vis  = "visiblemesh" in lc_parts
                 has_del  = "removemesh"  in lc_parts
                 has_kom  = "keeponlymesh" in lc_parts
 
-                if (has_vis or has_del or has_kom) and len(parts) >= 3:
+                if (has_del or has_kom) and len(parts) >= 3:
                     body_name = parts[1].strip('"')
                     mesh_raw  = parts[2].strip('"')
 
@@ -1434,11 +1472,7 @@ class QCProcessor:
                         rest += " " + nxt
                         depth += nxt.count("{") - nxt.count("}")
 
-                    vis_changes, del_names, keep_names = [], [], None
-                    if has_vis:
-                        cnt = self._extract_block_content(rest, "visiblemesh")
-                        if cnt is not None:
-                            vis_changes = self._parse_mesh_vis_tokens(cnt)
+                    del_names, keep_names = [], None
                     if has_del:
                         cnt = self._extract_block_content(rest, "removemesh")
                         if cnt is not None:
@@ -1459,14 +1493,14 @@ class QCProcessor:
 
                     if dmx_path.suffix.lower() != ".dmx":
                         self._warn(
-                            f"Line {line_num}: $body removemesh/visiblemesh requires a DMX mesh, "
+                            f"Line {line_num}: $body removemesh requires a DMX mesh, "
                             f"skipping edits for '{mesh_raw}'"
                         )
                         output_lines.append(f'$body "{body_name}" "{file_str}"\n')
                         continue
 
                     try:
-                        out_path = self._make_edited_dmx(dmx_path, vis_changes, del_names, keep_names=keep_names)
+                        out_path = self._make_edited_dmx(dmx_path, del_names, keep_names=keep_names)
                     except Exception as e:
                         raise QCCompileError(
                             f"Line {line_num}: $body mesh edit failed for '{mesh_raw}': {e}"
@@ -1487,8 +1521,8 @@ class QCProcessor:
 
             if command == "$rendermeshlist":
                 replace_rules  = []
-                # Each entry: (mesh_name, vis_changes, del_names, keep_names)
-                mesh_entries: list[tuple[str, list, list, list | None]] = []
+                # Each entry: (mesh_name, del_names, keep_names)
+                mesh_entries: list[tuple[str, list, list | None]] = []
                 variants       = []
                 ignore_missing = False
 
@@ -1518,8 +1552,8 @@ class QCProcessor:
                         if tl == "ignore_missing":
                             # handled as keyword=value on its own line; treat bare presence as true
                             ignore_missing = True
-                        elif tl not in ("replace", "suffix", "prefix", "visiblemesh", "removemesh", "keeponlymesh"):
-                            mesh_entries.append((t, [], [], None))
+                        elif tl not in ("replace", "suffix", "prefix", "removemesh", "keeponlymesh"):
+                            mesh_entries.append((t, [], None))
 
                 if depth > 0:
                     inner_lines, i = self._collect_block(all_lines, i, depth, base_dir)
@@ -1552,11 +1586,10 @@ class QCProcessor:
                         # removemesh / visiblemesh block keywords.
                         mesh_name = toks[0].strip('"')
                         lc_toks   = [t.lower() for t in toks]
-                        has_vis   = "visiblemesh" in lc_toks
                         has_del   = "removemesh"  in lc_toks
                         has_kom   = "keeponlymesh" in lc_toks
 
-                        if has_vis or has_del or has_kom:
+                        if has_del or has_kom:
                             # Collect rest of entry, gathering continuation lines for multi-line blocks.
                             rest  = " ".join(toks[1:])
                             depth2 = rest.count("{") - rest.count("}")
@@ -1566,11 +1599,7 @@ class QCProcessor:
                                 rest  += " " + nxt
                                 depth2 += nxt.count("{") - nxt.count("}")
 
-                            vis_changes, del_names, keep_names = [], [], None
-                            if has_vis:
-                                cnt = self._extract_block_content(rest, "visiblemesh")
-                                if cnt is not None:
-                                    vis_changes = self._parse_mesh_vis_tokens(cnt)
+                            del_names, keep_names = [], None
                             if has_del:
                                 cnt = self._extract_block_content(rest, "removemesh")
                                 if cnt is not None:
@@ -1579,15 +1608,15 @@ class QCProcessor:
                                 cnt = self._extract_block_content(rest, "keeponlymesh")
                                 if cnt is not None:
                                     keep_names = self._parse_del_tokens(cnt)
-                            mesh_entries.append((mesh_name, vis_changes, del_names, keep_names))
+                            mesh_entries.append((mesh_name, del_names, keep_names))
                         else:
                             # Plain line: all tokens are mesh names (skip stray "}")
                             for tok in toks:
                                 t = tok.strip('"')
                                 if t and t != "}":
-                                    mesh_entries.append((t, [], [], None))
+                                    mesh_entries.append((t, [], None))
 
-                for mesh_name, vis_changes, del_names, keep_names in mesh_entries:
+                for mesh_name, del_names, keep_names in mesh_entries:
                     body_name = mesh_name
                     for pattern, replacement in replace_rules:
                         body_name = re.sub(pattern, replacement, body_name)
@@ -1598,8 +1627,8 @@ class QCProcessor:
                     else:
                         file_str = mesh_name + ".dmx" if not Path(mesh_name).suffix else mesh_name
 
-                    # Apply removemesh / visiblemesh edits if present
-                    if (vis_changes or del_names or keep_names is not None) and dmx_path:
+                    # Apply removemesh edits if present
+                    if (del_names or keep_names is not None) and dmx_path:
                         if dmx_path.suffix.lower() != ".dmx":
                             self._warn(
                                 f"Line {line_num}: $rendermeshlist edit blocks require a DMX mesh, "
@@ -1607,7 +1636,7 @@ class QCProcessor:
                             )
                         else:
                             try:
-                                out_path = self._make_edited_dmx(dmx_path, vis_changes, del_names, keep_names=keep_names)
+                                out_path = self._make_edited_dmx(dmx_path, del_names, keep_names=keep_names)
                                 orig_dir = str(Path(file_str).parent)
                                 file_str = (
                                     out_path.name if orig_dir == "."
@@ -1630,7 +1659,7 @@ class QCProcessor:
 
                     output_lines.append(f'$body "{body_name}" "{file_str}"\n')
 
-                    # Variants intentionally do not inherit removemesh / visiblemesh edits.
+                    # Variants intentionally do not inherit removemesh edits.
                     for vtype, vstring in variants:
                         p = Path(file_str)
                         if vtype == "suffix":
@@ -1654,26 +1683,36 @@ class QCProcessor:
             # ----------------------------------------------------------
 
             if command == "$bodygroup":
+                open_pos = -1
+                brace_line = ""
                 if "{" in line:
                     brace_line = line
+                    open_pos = line.find("{")
                 elif i < len(all_lines) and "{" in all_lines[i]:
                     brace_line = all_lines[i]
+                    open_pos = brace_line.find("{")
                     i += 1
                 else:
                     output_lines.append(line)
                     continue
 
+                after_open = brace_line[open_pos + 1:].strip()
                 depth = brace_line.count("{") - brace_line.count("}")
                 if depth > 0:
                     inner_lines, i = self._collect_block(all_lines, i, depth, base_dir)
+                    if after_open:
+                        inner_lines.insert(0, after_open + "\n")
                 else:
-                    inner_lines = []
+                    inner_lines = [after_open + "\n"] if after_open else []
 
                 new_body = self._process_bodygroup_studio_lines(inner_lines, base_dir, line_num)
 
-                output_lines.append(line)
-                if "{" not in line:
-                    output_lines.append(brace_line if brace_line.endswith("\n") else brace_line + "\n")
+                if "{" in line:
+                    output_lines.append(line[:open_pos + 1] + "\n")
+                else:
+                    output_lines.append(line)
+                    output_lines.append(brace_line[:open_pos + 1] + "\n")
+
                 output_lines.extend(new_body)
                 continue
 
