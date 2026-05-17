@@ -2,7 +2,7 @@ import sys, os, json, copy
 from pathlib import Path
 import argparse, shutil, re
 from datetime import datetime
-from typing import List, Set, Optional
+from typing import List, Set, Optional, NamedTuple
 
 from core.vpk import GameVPKCache
 from core.materials import export_vtf, copy_materials, map_materials_to_vmt
@@ -40,13 +40,17 @@ from utils import (
     resolve_config_path
 )
 
+if hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+
 from core.archiver import Archiver
 from core.model import model_compile_studiomdl
 from core.gameinfo import get_game_search_paths
 from core.packager import package_archive
 from core.image import convert_image
 from core.texture_cache import TextureSignatureCache
-from core.qc import qc_read_materials, process_qc_file
+from core.qc import process_qc_file
+from core.mdl import read_mdl_materials, build_material_paths
 from core.vmt import VMTCreator
 
 
@@ -213,7 +217,7 @@ class ModelCompiler:
         self.gameinfo_dir = gameinfo_dir
         self.args = args
         self.logger = logger
-        self._vpk_cache = GameVPKCache(gameinfo_dir, search_paths) if gameinfo_dir else None
+        self._vpk_cache = GameVPKCache(gameinfo_dir, search_paths, logger=logger) if gameinfo_dir else None
         self.global_includedirs = global_includedirs if global_includedirs is not None else []
         self.moddir = moddir
         self.vprojectdir = vprojectdir
@@ -244,22 +248,25 @@ class ModelCompiler:
     def _compile_single_qc(self, qc_path: Path, base_name: str, variables: dict,
                             output_dir: Optional[Path], game_dir: Optional[Path],
                             logger: Logger, include_dirs: list = None):
-        temp_qc = self._process_qc(qc_path, logger, base_name=base_name,
-                                    variables=variables, include_dirs=include_dirs)
-        
+        temp_qc, preprocess_errors = self._process_qc(
+            qc_path, logger, base_name=base_name,
+            variables=variables, include_dirs=include_dirs,
+        )
+
         success = False
-        dumped_materials = []
+        moved_files: list[Path] = []
         try:
-            success, _, dumped_materials = model_compile_studiomdl(
-                studiomdl_exe=self.studiomdl_exe,
-                qc_file=temp_qc,
-                output_dir=output_dir,
-                game_dir=game_dir,
-                vproject_dir=(None if getattr(self.args, 'no_vproject', False)
-                              else (self.vprojectdir or game_dir)),
-                verbose=self.args.verbose,
-                logger=logger,
-            )
+            if preprocess_errors == 0:
+                success, moved_files = model_compile_studiomdl(
+                    studiomdl_exe=self.studiomdl_exe,
+                    qc_file=temp_qc,
+                    output_dir=output_dir,
+                    game_dir=game_dir,
+                    vproject_dir=(None if getattr(self.args, 'no_vproject', False)
+                                  else (self.vprojectdir or game_dir)),
+                    verbose=self.args.verbose,
+                    logger=logger,
+                )
         finally:
             if temp_qc.exists():
                 processed_dir = qc_path.parent / ".processed-qc"
@@ -271,10 +278,10 @@ class ModelCompiler:
                 except Exception as e:
                     logger.warn(f"Failed to move Processed QC to processed-qc: {e}")
 
-        return success, dumped_materials
+        return success, moved_files
 
     def compile_model(self, model_name: str, model_data: dict, compile_root: Path,
-                      global_vars: dict = None) -> bool:
+                      global_vars: dict = None) -> tuple[bool, list[Path], Optional[Path]]:
         self.logger.info("")
         model_logger = self.logger.with_context("MODEL")
 
@@ -283,12 +290,12 @@ class ModelCompiler:
         qc_raw = model_data.get("qc")
         if not qc_raw:
             model_logger.error(f"Model '{model_name}' is missing 'qc' field.")
-            return False
+            return False, [], None
 
         qc_path = _resolve_qc_path(qc_raw)
         if not qc_path:
             model_logger.error(f"QC file not found: {qc_raw} (tried .qc and .qci)")
-            return False
+            return False, [], None
 
         game_dir = self.gameinfo_dir
 
@@ -297,7 +304,7 @@ class ModelCompiler:
                 model_logger.error(
                     "--game mode requires either 'gameinfo' or 'vprojectdir' to be defined in config."
                 )
-                return False
+                return False, [], None
 
             if self.moddir:
                 output_dir = self.moddir
@@ -327,20 +334,19 @@ class ModelCompiler:
         if isinstance(model_include_dirs, list):
             include_dirs.extend(model_include_dirs)
 
-        success, dumped_materials = self._compile_single_qc(
+        success, moved_files = self._compile_single_qc(
             qc_path, model_name, main_model_defines, output_dir, game_dir,
             model_logger, include_dirs=include_dirs,
         )
 
         if not success:
             model_logger.error("Main QC compilation failed.")
-            return False
+            return False, [], None
 
-        dumped_materials = set(dumped_materials)
-        model_logger.info(f"Compiled {qc_path.name} ({len(dumped_materials)} materials)")
+        model_logger.info(f"Compiled {qc_path.name}")
 
         self._compile_submodels(
-            model_data, qc_path, output_dir, dumped_materials, model_logger,
+            model_data, qc_path, output_dir, moved_files, model_logger,
             game_dir=game_dir,
             global_vars=global_regular,
             regular_model_vars=regular_model_defines,
@@ -349,22 +355,19 @@ class ModelCompiler:
             include_dirs=include_dirs,
         )
 
-        if self.args.game:
-            return True
+        if not self.args.game:
+            self._process_subdata(model_data, output_dir, compile_root)
 
-        self._process_materials(qc_path, dumped_materials, output_dir, compile_root, model_logger)
-        self._process_subdata(model_data, output_dir, compile_root)
-
-        return True
+        return True, moved_files, output_dir
 
     def _process_qc(self, qc_path: Path, logger: Logger, base_name: str,
-                    variables: dict = None, include_dirs: list = None) -> Path:
+                    variables: dict = None, include_dirs: list = None) -> tuple[Path, int]:
         temp_qc_name = f"temp_{base_name}.qc"
         temp_qc = qc_path.parent / temp_qc_name
 
         compiler_name = self.studiomdl_exe.stem.lower()
 
-        qc_content = process_qc_file(
+        qc_content, error_count = process_qc_file(
             qc_path, logger=logger, _variables=variables,
             include_dirs=include_dirs, compiler=compiler_name,
             vrd_prefix=base_name,
@@ -373,11 +376,15 @@ class ModelCompiler:
         with open(temp_qc, 'w', encoding='utf-8') as dst:
             dst.write(qc_content)
 
+        if error_count > 0:
+            logger.error(
+                f"QC preprocessing failed with {error_count} error(s) — studiomdl will be skipped."
+            )
         logger.info(f"Flattened QC {qc_path.name} to {temp_qc.name}")
-        return temp_qc
+        return temp_qc, error_count
 
     def _compile_submodels(self, model_data: dict, qc_path: Path, output_dir: Optional[Path],
-                           dumped_materials: Set, logger: Logger, game_dir: Optional[Path],
+                           all_moved_files: list, logger: Logger, game_dir: Optional[Path],
                            global_vars: dict, regular_model_vars: dict,
                            targeted_model_vars: dict, model_name: str = "",
                            include_dirs: list = None):
@@ -399,17 +406,17 @@ class ModelCompiler:
 
             logger.info(f"Compiling sub-QC: {sub_qc_path.name} for submodel '{sub_name}'")
 
-            success, sub_dumped = self._compile_single_qc(
+            success, sub_moved = self._compile_single_qc(
                 sub_qc_path, f"{model_name}_{sub_name}", submodel_defines,
                 output_dir, game_dir, logger, include_dirs=include_dirs,
             )
 
             if success:
-                dumped_materials.update(sub_dumped)
-                logger.info(f"Compiled {sub_qc_path.name} ({len(sub_dumped)} materials)")
+                all_moved_files.extend(sub_moved)
+                logger.info(f"Compiled {sub_qc_path.name}")
                 self.logger.root.submodel_compiled += 1
 
-    def _process_materials(self, qc_path: Path, dumped_materials: Set, output_dir: Path,
+    def _process_materials(self, mdl_files: list, output_dir: Path,
                            compile_root: Path, logger: Logger):
         mode = self.args.mat_mode
 
@@ -444,15 +451,29 @@ class ModelCompiler:
 
         copy_target.mkdir(parents=True, exist_ok=True)
 
-        qc_material_paths = qc_read_materials(qc_path, dumped_materials)
-        mat_logger.info(f"Found {len(dumped_materials)} cdmaterials paths from Compile")
+        all_material_paths: list[str] = []
+        seen: set[str] = set()
+        for mdl_file in mdl_files:
+            try:
+                texture_names, cdmaterials = read_mdl_materials(mdl_file)
+                mat_logger.info(
+                    f"MDL {mdl_file.name}: {len(texture_names)} texture(s), "
+                    f"{len(cdmaterials)} cdmaterials dir(s)"
+                )
+                for p in build_material_paths(texture_names, cdmaterials):
+                    if p not in seen:
+                        seen.add(p)
+                        all_material_paths.append(p)
+            except Exception as e:
+                mat_logger.warn(f"Failed to read materials from {mdl_file.name}: {e}")
 
-        for mat in qc_material_paths:
+        mat_logger.info(f"Found {len(all_material_paths)} material path(s) from MDL")
+        for mat in all_material_paths:
             mat_logger.debug(mat)
 
-        mat_logger.info(f"Copying {len(dumped_materials)} materials to {copy_target}...")
+        mat_logger.info(f"Copying materials to {copy_target}...")
         material_to_vmt = map_materials_to_vmt(
-            qc_material_paths, self.search_paths, logger=mat_logger
+            all_material_paths, self.search_paths, logger=mat_logger
         )
         copied_files = copy_materials(
             material_to_vmt,
@@ -501,20 +522,31 @@ class MaterialSetCopier:
         mat_logger.info(f"Material-only copy complete ({len(copied_files)} files).")
 
 
+class _PipelineTools(NamedTuple):
+    studiomdl_exe: Path
+    gameinfo_dir: Optional[Path]
+    vtfcmd_exe: Optional[Path]
+    packager_exe: Optional[Path]
+    search_paths: List[Path]
+    compile_root: Path
+
+
 class ValveModelPipeline:
     def __init__(self, config: dict, args, logger: Logger):
         self.config = config
         self.args = args
         self.logger = logger
 
-    def execute(self):
+    # ── Prepare ──────────────────────────────────────────────────────────────
+
+    def _prepare(self) -> Optional["_PipelineTools"]:
         studiomdl_exe, gameinfo_path, vtfcmd_exe, packager_exe = PathResolver.resolve_and_validate(
             self.config, "studiomdl", "gameinfo", "vtfcmd", "packager"
         )
 
         if not studiomdl_exe:
             self.logger.error("Config missing required field: studiomdl")
-            return
+            return None
 
         if isinstance(self.args.game, str):
             game_override_dir = Path(self.args.game)
@@ -531,7 +563,7 @@ class ValveModelPipeline:
             self.logger.error(
                 "--game mode requires a valid 'gameinfo' path from config or --game argument."
             )
-            return
+            return None
 
         gameinfo_dir = None
         search_paths = []
@@ -552,18 +584,16 @@ class ValveModelPipeline:
                 self.logger.error(
                     "--single-addon requires 'addonroot' to be defined and non-empty in config."
                 )
-                return
+                return None
             compile_root = compile_root / addon_folder
-
-            # (made in main()), so this is safe — but document why.
             self.args.mat_mode = 1
-            self.logger.info(f"output root set to '{compile_root}', mat-mode forced to 1")
+            self.logger.info(f"Output root set to '{compile_root}', mat-mode forced to 1")
 
         if self.args.game:
             self.logger.info("--game mode enabled: Compiling models directly to game directory")
             if gameinfo_dir:
                 self.logger.info(f"Game directory: {gameinfo_dir}")
-            self.logger.info("Materials, data sections, and Packaging will be skipped")
+            self.logger.info("Materials, data sections, and packaging will be skipped")
         else:
             Archiver.clean(compile_root, self.logger, self.args.archive_old_ver,
                            archive_root=base_compile_root)
@@ -573,48 +603,84 @@ class ValveModelPipeline:
             self.logger.info("Game search paths:")
             for p in search_paths:
                 self.logger.info(f"\t{p}")
-            self.logger.info('')
+            self.logger.info("")
 
         if vtfcmd_exe:
             self.logger.info(f"VTF conversion enabled: {vtfcmd_exe}")
 
-        self._compile_models(compile_root, studiomdl_exe, search_paths, vtfcmd_exe, gameinfo_dir)
-
-        if self.args.game:
-            return
-
-        self._process_material_sets(compile_root, search_paths)
-        self._process_data_sections(compile_root, vtfcmd_exe)
-
-        if self.args.package_files:
-            self._package_archives(compile_root, packager_exe)
-
-    def _compile_models(self, compile_root: Path, studiomdl_exe: Path,
-                        search_paths: List[Path], vtfcmd_exe: Optional[Path],
-                        gameinfo_dir: Optional[Path]):
-        global_includedirs = self.config.get("includedirs", [])
-        global_define_vars = self.config.get("definevariable", {})
-
-        moddir_val = self.config.get("moddir")
-        moddir = Path(moddir_val).resolve() if moddir_val else None
-
-        vprojectdir_val = self.config.get("vprojectdir")
-        vprojectdir = Path(vprojectdir_val).resolve() if vprojectdir_val else None
-
-        compiler = ModelCompiler(
-            studiomdl_exe, search_paths, vtfcmd_exe, gameinfo_dir, self.args, self.logger,
-            global_includedirs=global_includedirs, moddir=moddir, vprojectdir=vprojectdir,
+        return _PipelineTools(
+            studiomdl_exe=studiomdl_exe,
+            gameinfo_dir=gameinfo_dir,
+            vtfcmd_exe=vtfcmd_exe,
+            packager_exe=packager_exe,
+            search_paths=search_paths,
+            compile_root=compile_root,
         )
 
+    def _make_compiler(self, tools: "_PipelineTools") -> "ModelCompiler":
+        global_includedirs = self.config.get("includedirs", [])
+        moddir_val = self.config.get("moddir")
+        vprojectdir_val = self.config.get("vprojectdir")
+        return ModelCompiler(
+            tools.studiomdl_exe,
+            tools.search_paths,
+            tools.vtfcmd_exe,
+            tools.gameinfo_dir,
+            self.args,
+            self.logger,
+            global_includedirs=global_includedirs,
+            moddir=Path(moddir_val).resolve() if moddir_val else None,
+            vprojectdir=Path(vprojectdir_val).resolve() if vprojectdir_val else None,
+        )
+
+    # ── Process ──────────────────────────────────────────────────────────────
+
+    def _compile_all_models(self, compiler: "ModelCompiler",
+                            tools: "_PipelineTools") -> list[tuple[list[Path], Optional[Path]]]:
+        global_define_vars = self.config.get("definevariable", {})
         only_filter = [e.lower() for e in self.args.only] if self.args.only else None
+        results: list[tuple[list[Path], Optional[Path]]] = []
 
         for model_name, model_data in self.config.get("model", {}).items():
             self.logger.root.model_total += 1
             if only_filter and model_name.lower() not in only_filter:
                 continue
-            if compiler.compile_model(model_name, model_data, compile_root,
-                                      global_vars=global_define_vars):
+            success, moved_files, output_dir = compiler.compile_model(
+                model_name, model_data, tools.compile_root, global_vars=global_define_vars
+            )
+            if success:
                 self.logger.root.model_compiled += 1
+                mdl_files = [f for f in moved_files if f.suffix.lower() == ".mdl"]
+                results.append((mdl_files, output_dir))
+
+        return results
+
+    # ── Package ───────────────────────────────────────────────────────────────
+
+    def _process_all_materials(self, compiler: "ModelCompiler",
+                               compile_results: list[tuple[list[Path], Optional[Path]]],
+                               tools: "_PipelineTools"):
+        mode = self.args.mat_mode
+        if mode == 0:
+            self.logger.warn("Skipping model material copying (mat-mode: 0)")
+            return
+
+        mat_logger = self.logger.with_context("MATERIAL")
+
+        if getattr(self.args, "single_addon", False) or mode == 2:
+            # Batch: one deduped copy pass for all models combined.
+            all_mdl_files = [f for mdl_files, _ in compile_results for f in mdl_files]
+            if all_mdl_files:
+                compiler._process_materials(
+                    all_mdl_files, tools.compile_root, tools.compile_root, mat_logger
+                )
+        else:
+            # mode=1: each model's materials go to its own output folder.
+            for mdl_files, output_dir in compile_results:
+                if mdl_files:
+                    compiler._process_materials(
+                        mdl_files, output_dir, tools.compile_root, mat_logger
+                    )
 
     def _process_material_sets(self, compile_root: Path, search_paths: List[Path]):
         for set_name, set_data in self.config.get("material", {}).items():
@@ -647,6 +713,30 @@ class ValveModelPipeline:
             for subfolder in compile_root.iterdir():
                 if subfolder.is_dir():
                     package_archive(packager_exe, subfolder, self.logger)
+
+    # ── Orchestration ─────────────────────────────────────────────────────────
+
+    def execute(self):
+        # ── Prepare ──────────────────────────────────────────────────────────
+        tools = self._prepare()
+        if tools is None:
+            return
+
+        compiler = self._make_compiler(tools)
+
+        # ── Process: compile all models ───────────────────────────────────────
+        compile_results = self._compile_all_models(compiler, tools)
+
+        if self.args.game:
+            return
+
+        # ── Package ───────────────────────────────────────────────────────────
+        self._process_all_materials(compiler, compile_results, tools)
+        self._process_material_sets(tools.compile_root, tools.search_paths)
+        self._process_data_sections(tools.compile_root, tools.vtfcmd_exe)
+
+        if self.args.package_files:
+            self._package_archives(tools.compile_root, tools.packager_exe)
 
 
 class ValveTexturePipeline:

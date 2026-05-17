@@ -18,7 +18,7 @@ The following tools must be available in your system path or specified in your c
 ## BUILD
 
 ```bash
-git clone [https://github.com/yourusername/KitsuneResource.git](https://github.com/yourusername/KitsuneResource.git)
+git clone [https://github.com/ToppiOfficial/KitsuneResource.git](https://github.com/ToppiOfficial/KitsuneResource.git)
 cd KitsuneResource
 pip install -r requirements.txt
 python build.py

@@ -4,7 +4,7 @@ from datetime import datetime
 from functools import wraps
 from typing import List, Optional
 
-SOFTVERSION = 4.2
+SOFTVERSION = 5.0
 SOFTBUILDDATE = 0
 
 SUPPORTED_TEXT_FORMAT = (
@@ -62,6 +62,7 @@ class Logger:
             self.warn_count = 0
             self.error_count = 0
             self.root = self
+            self._dedup_counts: dict[tuple, int] = {}
 
             self.model_compiled    = 0
             self.model_total       = 0
@@ -100,9 +101,18 @@ class Logger:
         elif level == "ERROR":
             self.root.error_count += 1
 
+        # Suppress repeated warn/error messages on console; still write them to the log file.
+        suppress_console = False
+        if level in ("WARN", "ERROR"):
+            key = (level, message)
+            prev = self.root._dedup_counts.get(key, 0)
+            self.root._dedup_counts[key] = prev + 1
+            if prev > 0:
+                suppress_console = True
+
         now = datetime.now()
 
-        if self.verbose or level != "DEBUG":
+        if not suppress_console and (self.verbose or level != "DEBUG"):
             timestamp_console = now.strftime("%H:%M:%S")
             level_prefix_str = f"[{level}]"
             prefix_part = f"{self.prefix} " if self.prefix else ""
@@ -110,7 +120,7 @@ class Logger:
             if self.use_color and level in self.COLOR:
                 level_color = self.COLOR[level]
                 colored_level_prefix = f"{level_color}{level_prefix_str}{self.COLOR['RESET']}"
-                
+
                 if level == "INFO":
                     console_line = f"{timestamp_console} | {prefix_part}{message}"
                 else:
@@ -121,7 +131,7 @@ class Logger:
                     console_line = f"{timestamp_console} | {prefix_part}{message}"
                 else:
                     console_line = f"{timestamp_console} | {prefix_part}{level_prefix_str} {message}"
-            
+
             print(console_line)
 
         if self.log_file and not console_only:
@@ -130,6 +140,14 @@ class Logger:
             context_str = f"[{self.context_label}] " if self.context_label else ""
             file_line = f"{timestamp_file}\t[{level.upper()}] {context_str}{clean_message}"
             self._write_to_file(file_line)
+
+    def get_dedup_summary(self) -> list:
+        lines = []
+        for (level, message), count in self.root._dedup_counts.items():
+            if count > 1:
+                clean_msg = self._ansi_escape.sub('', message)
+                lines.append(f"  [{level}] \"{clean_msg}\" — seen {count}x (first shown above)")
+        return lines
 
     def info(self, message): self._print("INFO", message)
     def warn(self, message): self._print("WARN", message)
@@ -195,6 +213,11 @@ def timer(func):
                     logger.info('')
                 if logger.warn_count > 0 or logger.error_count > 0:
                     logger.info(f"Build finished with {logger.error_count} errors and {logger.warn_count} warnings.")
+                    dedup = logger.get_dedup_summary()
+                    if dedup:
+                        logger.info(f"  Repeated messages suppressed ({len(dedup)} unique):")
+                        for line in dedup:
+                            logger.info(line)
                 logger.info(f"Total time elapsed: {elapsed:.2f} seconds")
                 logger.info("-" * 54)
             else:

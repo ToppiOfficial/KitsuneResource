@@ -74,7 +74,7 @@ def build_executable():
         "pyinstaller",
         "--clean",
         "--noconfirm",
-        f"--name={EXE_NAME}"
+        f"--name={EXE_NAME}",
     ]
 
     if ONE_FILE:

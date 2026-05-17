@@ -227,6 +227,7 @@ class VMTProcessor:
             tex_file = self.ctx.find_texture(tex_rel)
             if not tex_file:
                 vpk_path = f"materials/{Path(tex_rel).as_posix()}.vtf" if not str(tex_rel).endswith('.vtf') else f"materials/{Path(tex_rel).as_posix()}"
+                self.ctx.logger and self.ctx.logger.debug(f'VPK lookup: "{vpk_path}"')
                 if self.ctx.vpk_cache and self.ctx.vpk_cache.contains(vpk_path):
                     self.ctx.logger and self.ctx.logger.debug(f'Texture is game-resident (VPK): "{key}" -> {tex_rel}')
                 else:

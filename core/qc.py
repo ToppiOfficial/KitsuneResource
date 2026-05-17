@@ -110,6 +110,7 @@ class QCProcessor:
         self.compiler            = compiler
         self.vrd_prefix          = vrd_prefix
         self.vrd_name_counts     = {}
+        self.error_count: int    = 0
 
     def _log(self, level: str, color: str, msg: str):
         if self.logger:
@@ -172,6 +173,8 @@ class QCProcessor:
             return self._handle_else(line_num)
         if command == "$endif":
             if not self.if_stack:
+                self.error_count += 1
+                self._err(f"Line {line_num}: $endif without $if")
                 self.output_lines.append(f"// ERROR Line {line_num}: $endif without $if\n")
             else:
                 self.if_stack.pop()
@@ -180,6 +183,8 @@ class QCProcessor:
         return False
 
     def _stack_error(self, keyword: str, line_num: int) -> bool:
+        self.error_count += 1
+        self._err(f"Line {line_num}: {keyword} without $if")
         self.output_lines.append(f"// ERROR Line {line_num}: {keyword} without $if\n")
         return True
 
@@ -789,7 +794,10 @@ class QCProcessor:
                 continue
 
             if tokens[0].lower() == "pose":
-                result["pose"] = tokens[1]
+                if len(tokens) >= 2:
+                    result["pose"] = tokens[1]
+                else:
+                    result["pose_missing_arg"] = True
                 continue
 
             if tokens[0].lower() == "restpose":
@@ -848,8 +856,11 @@ class QCProcessor:
                 continue
             keyword = tokens[0].lower()
 
-            if keyword == "pose" and len(tokens) >= 2:
-                result["pose"] = tokens[1]
+            if keyword == "pose":
+                if len(tokens) >= 2:
+                    result["pose"] = tokens[1]
+                else:
+                    result["pose_missing_arg"] = True
             elif keyword == "frame" and len(tokens) >= 2:
                 result["frame"] = int(tokens[1])
             elif keyword == "usebone":
@@ -913,7 +924,7 @@ class QCProcessor:
         )
 
         try:
-            nested = process_qc_file(
+            nested, include_errors = process_qc_file(
                 target,
                 _include_stack=include_stack.copy(),
                 _variables=self.variables,
@@ -928,10 +939,12 @@ class QCProcessor:
                 compiler=self.compiler,
                 vrd_prefix=self.vrd_prefix,
             )
+            self.error_count += include_errors
             return header + nested + "\n"
         except Exception as e:
             msg = f"Line {line_num}: Failed to process include '{include_file}': {e}"
             if self.logger: self.logger.error(msg)
+            self.error_count += 1
             return f"// {msg}\n"
 
     def _handle_macro_expansion(self, active_command: str, parts: list,
@@ -1106,6 +1119,7 @@ class QCProcessor:
             # Global variable substitution for all remaining commands
             line, has_sub_error = self._substitute_variables(raw_line, line_num)
             if has_sub_error:
+                self.error_count += 1
                 output_lines.append(f"// ERROR Line {line_num}: Undefined variable in line: {raw_line.rstrip()}\n")
                 output_lines.append(line)
                 continue
@@ -1131,9 +1145,19 @@ class QCProcessor:
                 driver_bone = parts[1].strip('"')
                 block, i    = self._parse_driverbone_block(all_lines, i)
 
-                if not block or not block["pose"] or not block["target_bones"]:
+                if not block:
+                    raise QCCompileError(f"Line {line_num}: {command} '{driver_bone}' — block not found")
+                if not block.get("pose"):
+                    if block.get("pose_missing_arg"):
+                        raise QCCompileError(
+                            f"Line {line_num}: {command} '{driver_bone}' — 'pose' keyword present but filepath is missing"
+                        )
                     raise QCCompileError(
-                        f"Line {line_num}: {command} '{driver_bone}' block is incomplete (missing pose or target bones)"
+                        f"Line {line_num}: {command} '{driver_bone}' — missing 'pose <filepath>' in block"
+                    )
+                if not block.get("target_bones"):
+                    raise QCCompileError(
+                        f"Line {line_num}: {command} '{driver_bone}' — no target bones specified in block"
                     )
 
                 pose_stem = Path(block["pose"]).stem.lower()
@@ -1171,9 +1195,19 @@ class QCProcessor:
                 target_bone = parts[1].strip('"')
                 block, i    = self._parse_driverlookatbone_block(all_lines, i)
 
-                if not block or not block["pose"] or not block["helper_bones"]:
+                if not block:
+                    raise QCCompileError(f"Line {line_num}: $driverlookatbone '{target_bone}' — block not found")
+                if not block.get("pose"):
+                    if block.get("pose_missing_arg"):
+                        raise QCCompileError(
+                            f"Line {line_num}: $driverlookatbone '{target_bone}' — 'pose' keyword present but filepath is missing"
+                        )
                     raise QCCompileError(
-                        f"Line {line_num}: $driverlookatbone '{target_bone}' block is incomplete (missing pose or helper bones)"
+                        f"Line {line_num}: $driverlookatbone '{target_bone}' — missing 'pose <filepath>' in block"
+                    )
+                if not block.get("helper_bones"):
+                    raise QCCompileError(
+                        f"Line {line_num}: $driverlookatbone '{target_bone}' — no helper bones specified in block"
                     )
 
                 pose_stem       = Path(block["pose"]).stem.lower()
@@ -1349,9 +1383,7 @@ class QCProcessor:
 
             if command in ("$defineskeletonhierarchy", "$defineskeletonheirarchy"):
                 if len(parts) < 2:
-                    if self.logger: self.logger.warn(f"Line {line_num}: {command} requires a DMX path")
-                    output_lines.append(f"// WARNING Line {line_num}: {command} requires a DMX path\n")
-                    continue
+                    raise QCCompileError(f"Line {line_num}: {command} requires a DMX path argument")
 
                 dmx_raw      = parts[1].strip('"')
                 target_bones, i = self._collect_block_tokens(all_lines, i, stripped, base_dir)
@@ -1392,17 +1424,17 @@ class QCProcessor:
 
             if command == "$defineskeleton":
                 if len(parts) < 3:
-                    if self.logger: self.logger.warn(f"Line {line_num}: $defineskeleton requires a DMX path and frame index")
-                    output_lines.append(f"// WARNING Line {line_num}: $defineskeleton requires a DMX path and frame index\n")
-                    continue
+                    raise QCCompileError(
+                        f"Line {line_num}: $defineskeleton requires a DMX path and frame index"
+                    )
 
                 dmx_raw = parts[1].strip('"')
                 try:
                     frame_idx = int(parts[2])
                 except ValueError:
-                    if self.logger: self.logger.warn(f"Line {line_num}: $defineskeleton frame index must be an integer")
-                    output_lines.append(f"// WARNING Line {line_num}: $defineskeleton frame index must be an integer\n")
-                    continue
+                    raise QCCompileError(
+                        f"Line {line_num}: $defineskeleton frame index must be an integer, got '{parts[2]}'"
+                    )
 
                 target_bones, i = self._collect_block_tokens(all_lines, i, stripped, base_dir)
                 dmx_path        = self._resolve_mesh_path(dmx_raw, base_dir)
@@ -1533,9 +1565,7 @@ class QCProcessor:
                         i += 1
 
                 if "{" not in brace_line:
-                    if self.logger: self.logger.warn(f"Line {line_num}: $rendermeshlist missing opening brace")
-                    output_lines.append(f"// WARNING Line {line_num}: $rendermeshlist missing opening brace\n")
-                    continue
+                    raise QCCompileError(f"Line {line_num}: $rendermeshlist missing opening brace")
 
                 after_open = brace_line[brace_line.find("{") + 1:].strip()
                 depth      = 1 + after_open.count("{") - after_open.count("}")
@@ -1816,10 +1846,15 @@ def process_qc_file(
     with resolved.open("r", encoding="utf-8", errors="ignore") as f:
         all_lines = f.readlines()
 
-    output_lines = processor.process_file(resolved, all_lines, _include_stack)
-    _include_stack.remove(resolved)
+    try:
+        output_lines = processor.process_file(resolved, all_lines, _include_stack)
+    except QCCompileError as e:
+        processor.error_count += 1
+        if logger: logger.error(str(e))
+        output_lines = [f"// COMPILE ERROR: {e}\n"]
 
-    return _format_qc_output("".join(output_lines))
+    _include_stack.discard(resolved)
+    return _format_qc_output("".join(output_lines)), processor.error_count
 
 
 # ---------------------------------------------------------------------------

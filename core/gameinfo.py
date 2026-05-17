@@ -76,7 +76,7 @@ def get_game_search_paths(gameinfo_file: str | Path) -> list[Path]:
         return [base_dir]
 
     search_paths_block = search_paths_match.group(1)
-    game_entries = re.findall(r'game(?:\+\w+)*\s+"?([^\s"]+)"?', search_paths_block, re.IGNORECASE)
+    game_entries = re.findall(r'(?:game(?:\+\w+)*|platform)\s+"?([^\s"]+)"?', search_paths_block, re.IGNORECASE)
 
     steam_libraries = None  # lazily populated only if needed
 

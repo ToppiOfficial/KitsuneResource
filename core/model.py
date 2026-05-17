@@ -29,7 +29,7 @@ def _ensure_model_output_dir(studiomdl_exe: Path, qc_file: Path, game_dir: Path 
 
 def model_compile_studiomdl(studiomdl_exe: str | Path, qc_file: str | Path, output_dir: str | Path = None,
                             game_dir: str | Path = None, vproject_dir: str | Path = None,
-                            verbose: bool = False, logger: Logger = None) -> tuple[bool, list[Path], list[str]]:
+                            verbose: bool = False, logger: Logger = None) -> tuple[bool, list[Path]]:
     studiomdl_exe = Path(studiomdl_exe).resolve()
     qc_file = Path(qc_file).resolve()
     output_dir = Path(output_dir).resolve() if output_dir else None
@@ -39,7 +39,7 @@ def model_compile_studiomdl(studiomdl_exe: str | Path, qc_file: str | Path, outp
 
     log = logger or Logger(verbose=verbose)
 
-    cmd = [str(studiomdl_exe), "-nop4", "-verbose", "-dumpmaterials"]
+    cmd = [str(studiomdl_exe), "-nop4", "-verbose"]
     if vproject_dir:
         cmd += ["-game", str(Path(vproject_dir).resolve())]
     cmd.append(str(qc_file))
@@ -62,11 +62,9 @@ def model_compile_studiomdl(studiomdl_exe: str | Path, qc_file: str | Path, outp
 
         log.write_raw_to_log(stdout, source="studiomdl")
         _log_compiler_output_to_console(stdout, log, verbose)
-        
-        moved_files = _move_compiled_files(stdout, output_dir, log)
-        materials = _extract_materials(stdout, log)
 
-        return True, moved_files, materials
+        moved_files = _move_compiled_files(stdout, output_dir, log)
+        return True, moved_files
 
     except subprocess.CalledProcessError as e:
         log.error(f"Failed to compile {qc_file.name}")
@@ -77,11 +75,11 @@ def model_compile_studiomdl(studiomdl_exe: str | Path, qc_file: str | Path, outp
         if e.stderr:
             log.write_raw_to_log(e.stderr, source="studiomdl STDERR")
             _log_compiler_output_to_console(e.stderr, log, verbose, is_stderr=True)
-        return False, [], []
+        return False, []
 
     except Exception as e:
         log.error(f"Unexpected exception compiling {qc_file.name}: {e}")
-        return False, [], []
+        return False, []
 
 
 def _log_compiler_output_to_console(output: str, log: Logger, verbose: bool, is_stderr: bool = False):
@@ -169,18 +167,3 @@ def _cleanup_empty_dirs(dirs: set[Path], log: Logger):
                 folder = folder.parent
         except Exception:
             pass
-
-
-def _extract_materials(stdout: str, log: Logger) -> list[str]:
-    """Extract material paths from compiler output."""
-    materials = []
-    for line in stdout.splitlines():
-        line = line.strip()
-        if line.lower().startswith("material"):
-            parts = line.split(maxsplit=3)
-            if len(parts) == 4:
-                materials.append(parts[3].replace("\\", "/"))
-
-    materials = sorted(set(materials))
-    log.debug(f"Found {len(materials)} unique materials.")
-    return materials

@@ -209,3 +209,5 @@ __marimo__/
 scripts/
 icons/
 *.exe
+.claude/
+CLAUDE.md
