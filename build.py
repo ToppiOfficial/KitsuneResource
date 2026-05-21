@@ -3,8 +3,10 @@ EXE_NAME = "kitsuneresource"
 ICON_PATH = "images/appicon.psd"
 ONE_FILE = True
 
-UTILS_FILE = "utils.py"
+VERSION_FILE = "version.json"
+UTILS_FILE = "intern/utils/constants.py"
 
+import json
 import subprocess
 import sys
 import os
@@ -25,18 +27,30 @@ def detect_environment():
     return in_venv
 
 
-def stamp_build(build_stamp: int) -> str:
+def stamp_build(version: str, build_stamp: str) -> str:
     """
-    Replaces SOFTBUILDDATE in utils.py with the given stamp.
+    Stamps IS_DEV_BUILD, SOFTVERSION, and SOFTBUILDDATE into constants.py.
     Returns the original file content so it can be restored later.
     """
     with open(UTILS_FILE, "r", encoding="utf-8") as f:
         original = f.read()
 
     patched = re.sub(
-        r"^(SOFTBUILDDATE\s*=\s*).*$",
-        rf"\g<1>{build_stamp}",
+        r"^(IS_DEV_BUILD\s*:\s*bool\s*=\s*).*$",
+        r"\g<1>False",
         original,
+        flags=re.MULTILINE
+    )
+    patched = re.sub(
+        r'^(SOFTVERSION\s*:\s*str\s*=\s*).*$',
+        rf'\g<1>"{version}"',
+        patched,
+        flags=re.MULTILINE
+    )
+    patched = re.sub(
+        r'^(SOFTBUILDDATE\s*:\s*str\s*=\s*).*$',
+        rf'\g<1>"{build_stamp}"',
+        patched,
         flags=re.MULTILINE
     )
 
@@ -61,14 +75,22 @@ def build_executable():
         print(f"Error: Utils file '{UTILS_FILE}' not found!")
         return False
 
+    if not os.path.exists(VERSION_FILE):
+        print(f"Error: Version file '{VERSION_FILE}' not found!")
+        return False
+
+    with open(VERSION_FILE, "r", encoding="utf-8") as f:
+        version_str = str(json.load(f)["version"])
+
     # Generate build stamp: YYYYMMDDHHmm  e.g. 202604212345
     now = datetime.now()
-    build_stamp = int(now.strftime("%Y%m%d%H%M"))
+    build_stamp = now.strftime("%Y%m%d%H%M")
+    print(f"Version: {version_str}")
     print(f"Build stamp: {build_stamp}  ({now.strftime('%Y-%m-%d %H:%M')})")
 
-    # Patch utils.py and keep the original to restore after build
-    original_utils = stamp_build(build_stamp)
-    print(f"Stamped SOFTBUILDDATE = {build_stamp} into {UTILS_FILE}\n")
+    # Patch constants.py and keep the original to restore after build
+    original_utils = stamp_build(version_str, build_stamp)
+    print(f"Stamped constants into {UTILS_FILE}\n")
 
     cmd = [
         "pyinstaller",
@@ -79,6 +101,8 @@ def build_executable():
 
     if ONE_FILE:
         cmd.append("--onefile")
+
+    cmd.append("--noupx")
 
     if ICON_PATH and ICON_PATH.strip():
         if not os.path.exists(ICON_PATH):
@@ -106,7 +130,7 @@ def build_executable():
     finally:
         # Always restore utils.py to its original state
         restore_build(original_utils)
-        print(f"\nRestored {UTILS_FILE} to original state (SOFTBUILDDATE = 0).")
+        print(f"\nRestored {UTILS_FILE} to original state.")
 
     return success
 

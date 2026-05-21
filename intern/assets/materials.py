@@ -2,8 +2,8 @@ from pathlib import Path
 import re, shutil, subprocess
 from typing import Dict, List, Optional, Tuple
 
-from core.vpk import GameVPKCache
-from utils import Logger, TEXTURE_KEYS
+from intern.formats.vpk import GameVPKCache
+from intern.utils import Logger, TEXTURE_KEYS
 
 def find_material_vmt(material_name: str, search_paths: List[Path]) -> Optional[Path]:
     relative_vmt = Path("materials") / Path(material_name + ".vmt")
@@ -14,15 +14,26 @@ def find_material_vmt(material_name: str, search_paths: List[Path]) -> Optional[
     return None
 
 
-def map_materials_to_vmt(materials_list: List[str], search_paths: List[Path], logger: Optional[Logger] = None) -> Dict[str, Path]:
-    
+def map_materials_to_vmt(materials_list: List[str], search_paths: List[Path], logger: Optional[Logger] = None, base_names: Optional[List[str]] = None) -> Dict[str, Path]:
+
     result = {}
     for mat in materials_list:
         vmt = find_material_vmt(mat, search_paths)
         if vmt:
             result[mat] = vmt
-        elif logger:
-            logger.warn(f"Material not found: {mat}")
+
+    if logger:
+        if base_names is not None:
+            matched = set(result.keys())
+            for tex in base_names:
+                tex_norm = tex.strip('/').replace('\\', '/')
+                if not any(p == tex_norm or p.endswith(f"/{tex_norm}") for p in matched):
+                    logger.warn(f"Material not found: {tex_norm}")
+        else:
+            for mat in materials_list:
+                if mat not in result:
+                    logger.warn(f"Material not found: {mat}")
+
     return result
 
 
@@ -350,33 +361,15 @@ def copy_materials(
     return ctx.copied_files
 
 
-def export_vtf(
-    src_path,
-    dst_path,
-    vtfcmd,
-    fmt="DXT5",
-    alpha_fmt=None,
-    version="7.4",
-    flags=None,
-    resize=None,
-    resize_method=None,
-    resize_filter=None,
-    sharpen_filter=None,
-    nomipmaps=False,
-    normal_map=False,
-    normal_options=None,
-    gamma_correction=None,
-    extra_args=None,
-    silent=True,
+def _is_maretf(vtfcmd) -> bool:
+    return "maretf" in Path(vtfcmd).stem.lower()
+
+
+def _build_vtfcmd_args(
+    vtfcmd, src_path, dst_path, fmt, alpha_fmt, version, resize, resize_method,
+    resize_filter, sharpen_filter, silent, flags, nomipmaps, normal_map,
+    normal_options, gamma_correction, extra_args,
 ):
-    src_path = Path(src_path).resolve()
-    dst_path = Path(dst_path).resolve()
-    dst_path.parent.mkdir(parents=True, exist_ok=True)
-
-    if src_path.suffix.lower() == ".vtf":
-        shutil.copy2(src_path, dst_path)
-        return dst_path
-
     args = [
         str(vtfcmd),
         "-file", str(src_path),
@@ -431,16 +424,128 @@ def export_vtf(
     if extra_args:
         args.extend(extra_args)
 
+    return args
+
+
+def _build_maretf_args(
+    vtfcmd, src_path, dst_path, fmt, version, resize, resize_method,
+    resize_filter, silent, flags, nomipmaps, normal_map, gamma_correction,
+    extra_args,
+):
+    # Normalise extra_args up front so we can check for duplicates below.
+    extra_args_converted = [_to_double_dash(a) for a in extra_args] if extra_args else []
+    extra_flags = {a for a in extra_args_converted if a.startswith("--")}
+
+    args = [
+        str(vtfcmd),
+        "create", str(src_path),
+        "--output", str(dst_path),
+        "--yes",  # suppress prompts (equivalent to vtfcmd non-interactive behaviour)
+    ]
+
+    if "--format" not in extra_flags:
+        args += ["--format", fmt]
+    if "--version" not in extra_flags:
+        args += ["--version", version]
+
+    if resize:
+        w, h = resize
+        if "--width" not in extra_flags:
+            args += ["--width", str(w)]
+        if "--height" not in extra_flags:
+            args += ["--height", str(h)]
+
+    if resize_method and "--resize-method" not in extra_flags:
+        args += ["--resize-method", resize_method.upper()]
+    if resize_filter and "--filter" not in extra_flags:
+        args += ["--filter", resize_filter.upper()]
+
+    if silent:
+        args.append("--verbose")  # maretf suppresses output by default when no TTY; force it so errors are visible
+
+    if flags:
+        for f in flags:
+            f_clean = str(f).strip().upper()
+            if f_clean:
+                args += ["--flag", f_clean]
+                if f_clean == "NOMIP":
+                    nomipmaps = True
+
+    if nomipmaps:
+        args.append("--no-mips")
+
+    if normal_map:
+        args.append("--normal")
+
+    if gamma_correction is not None:
+        args += ["--gamma-correct", "--gamma-correct-amount", str(gamma_correction)]
+
+    if extra_args_converted:
+        args.extend(extra_args_converted)
+
+    return args
+
+
+def _to_double_dash(arg: str) -> str:
+    """Convert vtfcmd-style single-dash flags to double-dash for maretf.
+    e.g. -format -> --format. Leaves values, --flags, and -x shorthands alone."""
+    if arg.startswith("--") or not arg.startswith("-") or len(arg) < 3:
+        return arg
+    return "-" + arg
+
+
+def export_vtf(
+    src_path,
+    dst_path,
+    vtfcmd,
+    fmt="DXT5",
+    alpha_fmt=None,
+    version="7.4",
+    flags=None,
+    resize=None,
+    resize_method=None,
+    resize_filter=None,
+    sharpen_filter=None,
+    nomipmaps=False,
+    normal_map=False,
+    normal_options=None,
+    gamma_correction=None,
+    extra_args=None,
+    silent=True,
+):
+    src_path = Path(src_path).resolve()
+    dst_path = Path(dst_path).resolve()
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if src_path.suffix.lower() == ".vtf":
+        shutil.copy2(src_path, dst_path)
+        return dst_path
+
+    if _is_maretf(vtfcmd):
+        args = _build_maretf_args(
+            vtfcmd, src_path, dst_path, fmt, version, resize, resize_method,
+            resize_filter, silent, flags, nomipmaps, normal_map, gamma_correction,
+            extra_args,
+        )
+    else:
+        args = _build_vtfcmd_args(
+            vtfcmd, src_path, dst_path, fmt, alpha_fmt, version, resize, resize_method,
+            resize_filter, sharpen_filter, silent, flags, nomipmaps, normal_map,
+            normal_options, gamma_correction, extra_args,
+        )
+
     try:
         subprocess.run(args, check=True)
     except subprocess.CalledProcessError:
         print(f"[ERROR] VTF conversion failed: {src_path} -> {dst_path}")
         raise
 
-    converted = dst_path.parent / (src_path.stem + ".vtf")
-    if converted != dst_path:
-        if dst_path.exists():
-            dst_path.unlink()
-        converted.rename(dst_path)
+    # maretf writes directly to dst_path; vtfcmd writes <stem>.vtf into the output dir
+    if not _is_maretf(vtfcmd):
+        converted = dst_path.parent / (src_path.stem + ".vtf")
+        if converted != dst_path:
+            if dst_path.exists():
+                dst_path.unlink()
+            converted.rename(dst_path)
 
     return dst_path

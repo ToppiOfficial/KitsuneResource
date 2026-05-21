@@ -2,10 +2,11 @@ import shlex, re
 from simpleeval import simple_eval
 from pathlib import Path
 from typing import Optional
-from utils import Logger
-from core import vrd as vrd_module
-from core import flex_controllers, datamodel
-from core.bone_animations import read_dmx_bone_animation, frames_quat_to_euler, frames_rotation_to_degrees, read_smd_bone_animation, apply_world_scale
+from intern.utils import Logger
+from intern.source import vrd as vrd_module
+from intern.source import flex_controllers
+from intern.formats import datamodel
+from intern.formats.bone_animations import read_dmx_bone_animation, frames_quat_to_euler, frames_rotation_to_degrees, read_smd_bone_animation, apply_world_scale
 
 ORANGE = "\033[38;5;208m"
 RED    = "\033[91m"
@@ -361,7 +362,7 @@ class QCProcessor:
         return None
 
     # ------------------------------------------------------------------
-    # DMX editing — unified helper
+    # DMX editing - unified helper
     # ------------------------------------------------------------------
 
     def _make_edited_dmx(
@@ -1091,7 +1092,7 @@ class QCProcessor:
             if is_skipping:
                 continue
 
-            # $definemacro — collected over following lines ending with \\
+            # $definemacro - collected over following lines ending with \\
             if raw_cmd == "$definemacro":
                 no_cont     = stripped[:-2].strip() if stripped.endswith("\\\\") else stripped
                 macro_parts = self._parse_command(no_cont)
@@ -1146,18 +1147,18 @@ class QCProcessor:
                 block, i    = self._parse_driverbone_block(all_lines, i)
 
                 if not block:
-                    raise QCCompileError(f"Line {line_num}: {command} '{driver_bone}' — block not found")
+                    raise QCCompileError(f"Line {line_num}: {command} '{driver_bone}' - block not found")
                 if not block.get("pose"):
                     if block.get("pose_missing_arg"):
                         raise QCCompileError(
-                            f"Line {line_num}: {command} '{driver_bone}' — 'pose' keyword present but filepath is missing"
+                            f"Line {line_num}: {command} '{driver_bone}' - 'pose' keyword present but filepath is missing"
                         )
                     raise QCCompileError(
-                        f"Line {line_num}: {command} '{driver_bone}' — missing 'pose <filepath>' in block"
+                        f"Line {line_num}: {command} '{driver_bone}' - missing 'pose <filepath>' in block"
                     )
                 if not block.get("target_bones"):
                     raise QCCompileError(
-                        f"Line {line_num}: {command} '{driver_bone}' — no target bones specified in block"
+                        f"Line {line_num}: {command} '{driver_bone}' - no target bones specified in block"
                     )
 
                 pose_stem = Path(block["pose"]).stem.lower()
@@ -1196,18 +1197,18 @@ class QCProcessor:
                 block, i    = self._parse_driverlookatbone_block(all_lines, i)
 
                 if not block:
-                    raise QCCompileError(f"Line {line_num}: $driverlookatbone '{target_bone}' — block not found")
+                    raise QCCompileError(f"Line {line_num}: $driverlookatbone '{target_bone}' - block not found")
                 if not block.get("pose"):
                     if block.get("pose_missing_arg"):
                         raise QCCompileError(
-                            f"Line {line_num}: $driverlookatbone '{target_bone}' — 'pose' keyword present but filepath is missing"
+                            f"Line {line_num}: $driverlookatbone '{target_bone}' - 'pose' keyword present but filepath is missing"
                         )
                     raise QCCompileError(
-                        f"Line {line_num}: $driverlookatbone '{target_bone}' — missing 'pose <filepath>' in block"
+                        f"Line {line_num}: $driverlookatbone '{target_bone}' - missing 'pose <filepath>' in block"
                     )
                 if not block.get("helper_bones"):
                     raise QCCompileError(
-                        f"Line {line_num}: $driverlookatbone '{target_bone}' — no helper bones specified in block"
+                        f"Line {line_num}: $driverlookatbone '{target_bone}' - no helper bones specified in block"
                     )
 
                 pose_stem       = Path(block["pose"]).stem.lower()
@@ -1258,7 +1259,7 @@ class QCProcessor:
                 continue
 
             # ----------------------------------------------------------
-            # $model — block collection + scale + flex controller injection
+            # $model - block collection + scale + flex controller injection
             # ----------------------------------------------------------
 
             if command == "$model":
@@ -1378,7 +1379,7 @@ class QCProcessor:
                 continue
 
             # ----------------------------------------------------------
-            # $defineskeletonhierarchy — emit $hierarchy for each bone
+            # $defineskeletonhierarchy - emit $hierarchy for each bone
             # ----------------------------------------------------------
 
             if command in ("$defineskeletonhierarchy", "$defineskeletonheirarchy"):
@@ -1419,7 +1420,7 @@ class QCProcessor:
                 continue
 
             # ----------------------------------------------------------
-            # $defineskeleton — emit $definebone for each bone at a frame
+            # $defineskeleton - emit $definebone for each bone at a frame
             # ----------------------------------------------------------
 
             if command == "$defineskeleton":
@@ -1482,7 +1483,7 @@ class QCProcessor:
                 continue
 
             # ----------------------------------------------------------
-            # $body — optional removemesh / visiblemesh edit blocks
+            # $body - optional removemesh / visiblemesh edit blocks
             # ----------------------------------------------------------
 
             if command == "$body":
@@ -1545,10 +1546,10 @@ class QCProcessor:
                     )
                     output_lines.append(f'$body "{body_name}" "{rel_path}"\n')
                     continue
-                # No edit blocks — fall through to passthrough below.
+                # No edit blocks - fall through to passthrough below.
 
             # ----------------------------------------------------------
-            # $rendermeshlist — expand into $body lines
+            # $rendermeshlist - expand into $body lines
             # ----------------------------------------------------------
 
             if command == "$rendermeshlist":
@@ -1709,7 +1710,7 @@ class QCProcessor:
                 continue
 
             # ----------------------------------------------------------
-            # $bodygroup — handle studio ... visiblemesh { } / removemesh { } sub-blocks
+            # $bodygroup - handle studio ... visiblemesh { } / removemesh { } sub-blocks
             # ----------------------------------------------------------
 
             if command == "$bodygroup":

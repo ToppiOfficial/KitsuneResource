@@ -1,9 +1,7 @@
 from pathlib import Path
 from typing import Optional
 
-from utils import (
-    Logger, resolve_json_path
-)
+from intern.utils import Logger, resolve_json_path
 
 class VMTCreator:
     """Creates VMT files from templates"""

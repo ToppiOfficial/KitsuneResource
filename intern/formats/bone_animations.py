@@ -1,4 +1,4 @@
-from core import datamodel
+from intern.formats import datamodel
 import re
 from math import cos, sin, atan2, asin, degrees, radians
 from typing import NamedTuple
@@ -226,7 +226,7 @@ def read_dmx_bone_animation(filepath: str, target_bone: str | None = None) -> Bo
         )
 
     def _walk(joint, parent_name, pmap, tmap, imap):
-        """Recursively populate parent map, transform map and id→name map."""
+        """Recursively populate parent map, transform map and id->name map."""
         for child in joint.get("children", []):
             if not _is_joint(child):
                 continue
@@ -240,7 +240,7 @@ def read_dmx_bone_animation(filepath: str, target_bone: str | None = None) -> Bo
             _walk(child, child.name, pmap, tmap, imap)
 
     # -------------------------------------------------------------------------
-    # Mesh / skeleton DMX — return a single rest-pose frame
+    # Mesh / skeleton DMX - return a single rest-pose frame
     # -------------------------------------------------------------------------
     if not dm.root.get("animationList"):
         parent_map: dict[str, str | None] = {}
@@ -277,7 +277,7 @@ def read_dmx_bone_animation(filepath: str, target_bone: str | None = None) -> Bo
         # also live in the same DmeTransformList on older format versions.
         base_states = DmeModel.get("baseStates")
         if base_states and len(base_states) > 0:
-            known = set(parent_map) if parent_map else None  # None → no filter (fallback)
+            known = set(parent_map) if parent_map else None  # None -> no filter (fallback)
             for trfm in base_states[0].get("transforms", []):
                 if known is not None and trfm.name not in known:
                     continue
@@ -309,7 +309,7 @@ def read_dmx_bone_animation(filepath: str, target_bone: str | None = None) -> Bo
     total_frames = max(1, round(float(duration) * frame_rate) + 1)
 
     parent_map: dict[str, str | None] = {}
-    transform_id_map: dict[any, str] = {}   # DmeTransform.id → bone_name
+    transform_id_map: dict[any, str] = {}   # DmeTransform.id -> bone_name
 
     DmeModel = _find_model()
     if DmeModel:

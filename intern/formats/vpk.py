@@ -37,7 +37,7 @@ def _parse_tree(tree: bytes) -> set:
         nonlocal pos
         end = tree.find(b'\x00', pos)  # find() returns -1 instead of raising ValueError
         if end == -1:
-            return ''  # out-of-bounds → treat as terminator
+            return ''  # out-of-bounds -> treat as terminator
         s = tree[pos:end].decode('latin-1')
         pos = end + 1
         return s
@@ -83,7 +83,7 @@ class GameVPKCache:
                     d = _VPKDir(vpk_path)
                     self._pak_files.append(d)
                     self._logger and self._logger.debug(
-                        f"VPK: {vpk_path.name} v{d.version} tree={d.tree_size}B — {len(d._paths)} paths"
+                        f"VPK: {vpk_path.name} v{d.version} tree={d.tree_size}B - {len(d._paths)} paths"
                     )
                 except Exception as e:
                     self._logger and self._logger.warn(

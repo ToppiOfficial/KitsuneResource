@@ -1,6 +1,6 @@
 import subprocess, shutil, re
 from pathlib import Path
-from utils import Logger
+from intern.utils import Logger
 
 def _extract_modelname(qc_file: Path) -> str | None:
     with qc_file.open("r", encoding="utf-8", errors="ignore") as f:

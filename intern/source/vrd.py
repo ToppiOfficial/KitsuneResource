@@ -1,5 +1,5 @@
 from pathlib import Path
-from core import bone_animations
+from intern.formats import bone_animations
 import shlex
 
 

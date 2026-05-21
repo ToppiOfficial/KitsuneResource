@@ -1,5 +1,5 @@
 from pathlib import Path
-from core import datamodel
+from intern.formats import datamodel
 
 CATEGORY_ORDER = ["eyes", "eyelid", "brow", "mouth", "cheek", "misc"]
 

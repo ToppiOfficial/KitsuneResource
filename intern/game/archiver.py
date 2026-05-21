@@ -3,7 +3,7 @@ import zipfile
 import send2trash
 from datetime import datetime
 from pathlib import Path
-from utils import Logger
+from intern.utils import Logger
 
 class Archiver:
     """Handles cleanup and compressed archiving of the compile directory."""

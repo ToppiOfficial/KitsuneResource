@@ -1,6 +1,6 @@
 import subprocess
 from pathlib import Path
-from utils import Logger
+from intern.utils import Logger
 
 def _build_vpk_cmd(exe: Path, folder: Path, **kwargs) -> list[str]:
     return [str(exe), str(folder)]
