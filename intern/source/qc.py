@@ -2,7 +2,7 @@ import shlex, re
 from simpleeval import simple_eval
 from pathlib import Path
 from typing import Optional
-from intern.utils import Logger
+from intern.utils import Logger, SOFTVERSION, SOFTBUILDDATE
 from intern.source import vrd as vrd_module
 from intern.source import flex_controllers
 from intern.formats import datamodel
@@ -13,6 +13,23 @@ RED    = "\033[91m"
 RESET  = "\033[0m"
 
 _CMP_RE = re.compile(r'^\s*([^\s"]+|"[^"]+")\s*(==|!=|>=|<=|>|<)\s*([^\s"]+|"[^"]+")\s*$')
+
+
+def _is_in_qc_comment(text: str, pos: int) -> bool:
+    """Return True if pos falls after a // comment marker on the same line."""
+    line_start = text.rfind('\n', 0, pos) + 1
+    line_before = text[line_start:pos]
+    in_quote = False
+    for i, c in enumerate(line_before):
+        if c == '"':
+            in_quote = not in_quote
+        elif not in_quote and line_before[i:i+2] == '//':
+            return True
+    return False
+
+
+_EXCLUDE_MESH_KEYWORDS = frozenset({"excludemesh", "removemesh"})
+_ISOLATE_MESH_KEYWORDS = frozenset({"isolatemesh", "keeponlymesh"})
 
 
 # ---------------------------------------------------------------------------
@@ -112,6 +129,10 @@ class QCProcessor:
         self.vrd_prefix          = vrd_prefix
         self.vrd_name_counts     = {}
         self.error_count: int    = 0
+        self._diagnostics: list[tuple[str, int | None, str]] = []
+
+    def _add_diagnostic(self, level: str, line_num: int | None, message: str) -> None:
+        self._diagnostics.append((level, line_num, message))
 
     def _log(self, level: str, color: str, msg: str):
         if self.logger:
@@ -123,7 +144,11 @@ class QCProcessor:
 
     def _parse_command(self, line: str) -> list:
         try:
-            return shlex.split(line)
+            tokens = shlex.split(line)
+            try:
+                return tokens[:tokens.index('//')]
+            except ValueError:
+                return tokens
         except ValueError:
             return []
 
@@ -176,7 +201,7 @@ class QCProcessor:
             if not self.if_stack:
                 self.error_count += 1
                 self._err(f"Line {line_num}: $endif without $if")
-                self.output_lines.append(f"// ERROR Line {line_num}: $endif without $if\n")
+                self._add_diagnostic("error", line_num, "$endif without $if")
             else:
                 self.if_stack.pop()
             return True
@@ -186,7 +211,7 @@ class QCProcessor:
     def _stack_error(self, keyword: str, line_num: int) -> bool:
         self.error_count += 1
         self._err(f"Line {line_num}: {keyword} without $if")
-        self.output_lines.append(f"// ERROR Line {line_num}: {keyword} without $if\n")
+        self._add_diagnostic("error", line_num, f"{keyword} without $if")
         return True
 
     def _handle_elif(self, parts: list, line_num: int, base_dir: Path = None) -> bool:
@@ -276,52 +301,62 @@ class QCProcessor:
     def _handle_define_variable(self, parts: list, line_num: int, line: str) -> Optional[str]:
         if len(parts) < 3:
             self._warn(f"Line {line_num}: Malformed $definevariable: {line}")
-            return f"// WARNING Line {line_num}: Malformed $definevariable: {line}\n"
+            self._add_diagnostic("warning", line_num, f"Malformed $definevariable: {line.strip()}")
+            return None
         try:
             name     = parts[1]
             raw, err = self._substitute_variables(" ".join(parts[2:]), line_num)
             if err:
-                return f"// ERROR Line {line_num}: Undefined variable in expression for $definevariable: {line.rstrip()}\n"
+                self._add_diagnostic("error", line_num, f"Undefined variable in expression for $definevariable: {line.rstrip()}")
+                return None
 
             if name in self.macro_args_override:
                 self._warn(f"Line {line_num}: Cannot define variable '{name}' - shadowed by macro argument")
-                return f"// WARNING Line {line_num}: Variable '{name}' shadowed by macro argument, ignoring\n"
+                self._add_diagnostic("warning", line_num, f"Variable '{name}' shadowed by macro argument, ignoring")
+                return None
             if name in self.json_vars:
                 return f"// Overridden by JSON config: {line}\n"
             if name in self.defined_vars:
                 self._warn(f"Line {line_num}: Variable '{name}' already defined, ignoring redefinition")
-                return f"// WARNING Line {line_num}: Variable '{name}' already defined, ignoring\n"
+                self._add_diagnostic("warning", line_num, f"Variable '{name}' already defined, ignoring")
+                return None
 
             self.variables[name] = self._eval_value(raw)
             self.defined_vars.add(name)
             return None
         except Exception as e:
             self._warn(f"Line {line_num}: Failed to parse $definevariable: {line} ({e})")
-            return f"// WARNING Line {line_num}: Failed to parse $definevariable: {line} ({e})\n"
+            self._add_diagnostic("warning", line_num, f"Failed to parse $definevariable: {line.strip()} ({e})")
+            return None
 
     def _handle_redefine_variable(self, parts: list, line_num: int, line: str) -> Optional[str]:
         if len(parts) < 3:
             self._warn(f"Line {line_num}: Malformed $redefinevariable: {line}")
-            return f"// WARNING Line {line_num}: Malformed $redefinevariable: {line}\n"
+            self._add_diagnostic("warning", line_num, f"Malformed $redefinevariable: {line.strip()}")
+            return None
         try:
             name     = parts[1]
             raw, err = self._substitute_variables(" ".join(parts[2:]), line_num)
             if err:
-                return f"// ERROR Line {line_num}: Undefined variable in expression for $redefinevariable: {line.rstrip()}\n"
+                self._add_diagnostic("error", line_num, f"Undefined variable in expression for $redefinevariable: {line.rstrip()}")
+                return None
 
             if name in self.macro_args_override:
                 self._err(f"Line {line_num}: Cannot redefine macro argument '{name}'")
-                return f"// ERROR Line {line_num}: Cannot redefine macro argument '{name}'\n"
+                self._add_diagnostic("error", line_num, f"Cannot redefine macro argument '{name}'")
+                return None
             if name not in self.defined_vars:
                 self._err(f"Line {line_num}: Cannot redefine undefined variable '{name}'")
-                return f"// ERROR Line {line_num}: Cannot redefine undefined variable '{name}'\n"
+                self._add_diagnostic("error", line_num, f"Cannot redefine undefined variable '{name}'")
+                return None
 
             self.variables[name] = self._eval_value(raw)
             self._info(f"Line {line_num}: Variable '{name}' redefined to '{self.variables[name]}'")
             return None
         except Exception as e:
             self._warn(f"Line {line_num}: Failed to parse $redefinevariable: {line} ({e})")
-            return f"// WARNING Line {line_num}: Failed to parse $redefinevariable: {line} ({e})\n"
+            self._add_diagnostic("warning", line_num, f"Failed to parse $redefinevariable: {line.strip()} ({e})")
+            return None
 
     # ------------------------------------------------------------------
     # Path resolution
@@ -426,7 +461,7 @@ class QCProcessor:
         if keep_names is not None:
             if not keep_names:
                 raise QCCompileError(
-                    f"keeponlymesh block is empty for '{dmx_path.name}'. Operation aborted to avoid empty mesh."
+                    f"isolatemesh/keeponlymesh block is empty for '{dmx_path.name}'. Operation aborted to avoid empty mesh."
                 )
             for m_name in list(mesh_map):
                 if m_name not in keep_names and m_name not in del_names:
@@ -486,7 +521,7 @@ class QCProcessor:
                 if mesh_elem is None:
                     if self.logger:
                         self.logger.warn(
-                            f"removemesh: DmeMesh '{mesh_name}' not found in '{dmx_path.name}'"
+                            f"excludemesh: DmeMesh '{mesh_name}' not found in '{dmx_path.name}'"
                         )
                     continue
 
@@ -503,8 +538,6 @@ class QCProcessor:
                         trfm = e.get("transform")
                         if isinstance(trfm, datamodel.Element):
                             _condemn(trfm)
-                    elif e.name == mesh_name and e.type in ("DmeDag", "DmeTransform"):
-                        _condemn(e)
 
             # ---- remove condemned elements from dm.elements ---------------------
             for e in condemned:
@@ -550,65 +583,81 @@ class QCProcessor:
         Find the first ``keyword { ... }`` in *text*, extract its content,
         remove it from *text*, and return ``(content, remaining_text)``.
         Returns ``(None, text)`` unchanged if the keyword is not found.
+        Skips occurrences that fall inside a // line comment.
         """
-        m = re.search(r'(?<!\w)' + re.escape(keyword) + r'(?!\w)', text, re.IGNORECASE)
-        if not m:
-            return None, text
-        after = text[m.end():]
-        brace_pos = after.find("{")
-        if brace_pos == -1:
-            return None, text
-        depth = close_pos = 0
-        for ci, ch in enumerate(after):
-            if ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    close_pos = ci
-                    break
-        if depth != 0:
-            return None, text
-        content   = after[brace_pos + 1 : close_pos].strip()
-        remaining = text[: m.start()] + after[close_pos + 1 :]
-        return content, remaining
+        pattern = r'(?<!\w)' + re.escape(keyword) + r'(?!\w)'
+        for m in re.finditer(pattern, text, re.IGNORECASE):
+            if _is_in_qc_comment(text, m.start()):
+                continue
+            after = text[m.end():]
+            brace_pos = after.find("{")
+            if brace_pos == -1:
+                return None, text
+            depth = close_pos = 0
+            for ci, ch in enumerate(after):
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        close_pos = ci
+                        break
+            if depth != 0:
+                return None, text
+            content   = after[brace_pos + 1 : close_pos].strip()
+            remaining = text[: m.start()] + after[close_pos + 1 :]
+            return content, remaining
+        return None, text
 
     # ------------------------------------------------------------------
     # Bodygroup handler
     # ------------------------------------------------------------------
 
     def _parse_del_tokens(self, content: str) -> list[str]:
-        """Parse mesh names from a removemesh { } block content."""
-        return [t.strip('"') for t in self._parse_command(content.strip()) if t.strip('"')]
+        """Parse mesh names from an excludemesh/isolatemesh { } block content."""
+        names = []
+        for ln in content.splitlines():
+            s = ln.strip()
+            if not s or s.startswith('//'):
+                continue
+            for t in self._parse_command(s):
+                name = t.strip('"')
+                if name:
+                    names.append(name)
+        return names
 
     def _extract_block_content(self, text: str, keyword: str) -> str | None:
         """
         Find 'keyword { ... }' in text (word-boundary safe) and return the
         content between the outer braces, or None if not found.
+        Skips occurrences that fall inside a // line comment.
         """
-        m = re.search(r'(?<!\w)' + re.escape(keyword) + r'(?!\w)', text, re.IGNORECASE)
-        if not m:
-            return None
-        after = text[m.end():]
-        brace_pos = after.find("{")
-        if brace_pos == -1:
-            return None
-        depth = close_pos = 0
-        for ci, ch in enumerate(after):
-            if ch == "{":
-                depth += 1
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    close_pos = ci
-                    break
-        return after[brace_pos + 1:close_pos].strip() if depth == 0 else None
+        pattern = r'(?<!\w)' + re.escape(keyword) + r'(?!\w)'
+        for m in re.finditer(pattern, text, re.IGNORECASE):
+            if _is_in_qc_comment(text, m.start()):
+                continue
+            after = text[m.end():]
+            brace_pos = after.find("{")
+            if brace_pos == -1:
+                return None
+            depth = close_pos = 0
+            for ci, ch in enumerate(after):
+                if ch == "{":
+                    depth += 1
+                elif ch == "}":
+                    depth -= 1
+                    if depth == 0:
+                        close_pos = ci
+                        break
+            return after[brace_pos + 1:close_pos].strip() if depth == 0 else None
+        return None
 
     def _process_bodygroup_studio_lines(self, block_lines: list, base_dir: Path, line_num: int) -> list:
         """
-        Scan bodygroup block lines for studio lines carrying visiblemesh{} and/or
-        removemesh{} blocks.  Both keywords may appear together on the same studio
-        line.  Plain studio/blank lines are passed through unchanged.
+        Scan bodygroup block lines for studio lines carrying excludemesh{} /
+        isolatemesh{} blocks (legacy: removemesh{} / keeponlymesh{}).  Both
+        keywords may appear together on the same studio line.  Plain studio/blank
+        lines are passed through unchanged.
         """
         out = []
         i = 0
@@ -627,8 +676,8 @@ class QCProcessor:
                 continue
 
             lc = [t.lower() for t in tokens]
-            has_del = "removemesh"  in lc
-            has_kom = "keeponlymesh" in lc
+            has_del = bool(_EXCLUDE_MESH_KEYWORDS & set(lc))
+            has_kom = bool(_ISOLATE_MESH_KEYWORDS & set(lc))
             if not has_del and not has_kom:
                 out.append(raw)
                 continue
@@ -649,14 +698,18 @@ class QCProcessor:
             keep_names  = None
 
             if has_del:
-                content = self._extract_block_content(rest, "removemesh")
-                if content is not None:
-                    del_names = self._parse_del_tokens(content)
+                for _kw in _EXCLUDE_MESH_KEYWORDS:
+                    content = self._extract_block_content(rest, _kw)
+                    if content is not None:
+                        del_names = self._parse_del_tokens(content)
+                        break
 
             if has_kom:
-                content = self._extract_block_content(rest, "keeponlymesh")
-                if content is not None:
-                    keep_names = self._parse_del_tokens(content)
+                for _kw in _ISOLATE_MESH_KEYWORDS:
+                    content = self._extract_block_content(rest, _kw)
+                    if content is not None:
+                        keep_names = self._parse_del_tokens(content)
+                        break
 
             if not del_names and keep_names is None:
                 out.append(f'studio "{studio_path_raw}"\n')
@@ -888,7 +941,8 @@ class QCProcessor:
                         base_dir: Path, include_stack: set, processed_line: str) -> str:
         if len(parts) < 2:
             self._warn(f"Line {line_num}: $include without path: {original_line.rstrip()}")
-            return f"// WARNING Line {line_num}: $include without path: {original_line.rstrip()}\n"
+            self._add_diagnostic("warning", line_num, f"$include without path: {original_line.rstrip()}")
+            return None
 
         include_file, err = self._substitute_variables(parts[1], line_num)
         if err:
@@ -910,19 +964,19 @@ class QCProcessor:
         if not target.exists():
             if if_file_exist:
                 self._warn(f"Line {line_num}: Optional include not found, skipping: {include_file}")
-                return f"// WARNING Line {line_num}: Optional include not found, skipping: {include_file}\n"
+                self._add_diagnostic("warning", line_num, f"Optional include not found, skipping: {include_file}")
+                return None
             msg = f"Include file not found at line {line_num}: {include_file}"
             if self.logger: self.logger.error(msg)
             raise FileNotFoundError(msg)
 
         if target in include_stack:
             self._warn(f"Line {line_num}: Circular include detected: {include_file}")
-            return f"// WARNING Line {line_num}: Circular include detected: {include_file}\n"
+            self._add_diagnostic("warning", line_num, f"Circular include detected: {include_file}")
+            return None
 
-        header = (
-            f"\n// NOTE: Original path '{include_file}' not found, using includedirs: {target}\n"
-            if from_dirs else "\n"
-        )
+        if from_dirs:
+            self._add_diagnostic("message", line_num, f"$include '{include_file}' not found locally, resolved via includedirs to: {target.name}")
 
         try:
             nested, include_errors = process_qc_file(
@@ -939,14 +993,16 @@ class QCProcessor:
                 _current_scale=self.current_scale,
                 compiler=self.compiler,
                 vrd_prefix=self.vrd_prefix,
+                _shared_diagnostics=self._diagnostics,
             )
             self.error_count += include_errors
-            return header + nested + "\n"
+            return "\n" + nested + "\n"
         except Exception as e:
             msg = f"Line {line_num}: Failed to process include '{include_file}': {e}"
             if self.logger: self.logger.error(msg)
             self.error_count += 1
-            return f"// {msg}\n"
+            self._add_diagnostic("error", line_num, f"Failed to process include '{include_file}': {e}")
+            return None
 
     def _handle_macro_expansion(self, active_command: str, parts: list,
                                  base_dir: Path, include_stack: set, line_num: int) -> str:
@@ -999,7 +1055,8 @@ class QCProcessor:
 
         processed, has_error = self._substitute_variables(line, line_num)
         if has_error:
-            return f"// ERROR Line {line_num}: Undefined variable in line: {line.rstrip()}\n"
+            self._add_diagnostic("error", line_num, f"Undefined variable in line: {line.rstrip()}")
+            return None
 
         active_parts   = self._parse_command(processed.strip())
         active_command = active_parts[0].lower() if active_parts else ""
@@ -1101,7 +1158,7 @@ class QCProcessor:
                     macro_lines   = []
                 else:
                     if self.logger: self.logger.warn(f"Line {line_num}: Malformed $definemacro: {stripped}")
-                    output_lines.append(f"// WARNING Line {line_num}: Malformed $definemacro: {stripped}\n")
+                    self._add_diagnostic("warning", line_num, f"Malformed $definemacro: {stripped}")
                 continue
 
             # Variable definition commands are handled before global substitution so that
@@ -1121,7 +1178,7 @@ class QCProcessor:
             line, has_sub_error = self._substitute_variables(raw_line, line_num)
             if has_sub_error:
                 self.error_count += 1
-                output_lines.append(f"// ERROR Line {line_num}: Undefined variable in line: {raw_line.rstrip()}\n")
+                self._add_diagnostic("error", line_num, f"Undefined variable in line: {raw_line.rstrip()}")
                 output_lines.append(line)
                 continue
 
@@ -1281,12 +1338,19 @@ class QCProcessor:
                 elif noautodmxrules_mode == 2:
                     block_content = re.sub(r'(?i)[ \t]*\bnoautodmxrules(?:\s+\d+)?[ \t]*\n?', '', block_content)
 
-                # Extract removemesh from block before studiomdl sees it.
+                # Extract excludemesh/removemesh from block before studiomdl sees it.
                 # Commands must be stripped regardless of whether the mesh is a DMX.
-                rm_content,   block_content = self._strip_block(block_content, "removemesh")
-                kom_content,  block_content = self._strip_block(block_content, "keeponlymesh")
-                del_names_m   = self._parse_del_tokens(rm_content)      if rm_content is not None else []
-                keep_names_m  = self._parse_del_tokens(kom_content)     if kom_content is not None else None
+                del_names_m = []
+                for _kw in _EXCLUDE_MESH_KEYWORDS:
+                    _c, block_content = self._strip_block(block_content, _kw)
+                    if _c is not None:
+                        del_names_m.extend(self._parse_del_tokens(_c))
+
+                keep_names_m = None
+                for _kw in _ISOLATE_MESH_KEYWORDS:
+                    _c, block_content = self._strip_block(block_content, _kw)
+                    if _c is not None:
+                        keep_names_m = (keep_names_m or []) + self._parse_del_tokens(_c)
 
                 sub_parts = self._parse_command(line.strip())
 
@@ -1312,7 +1376,7 @@ class QCProcessor:
                     if not Path(mesh_raw).suffix.lower() in (".dmx", ".smd"):
                         final_mesh_path += dmx_path.suffix
 
-                    # Combined DMX edit: noautodmxrules 2 + removemesh
+                    # Combined DMX edit: noautodmxrules 2 + excludemesh/isolatemesh
                     # All three are handled in a single load-edit-write pass via _make_edited_dmx.
                     needs_dmx_edit = (noautodmxrules_mode == 2 or del_names_m or keep_names_m is not None)
                     if needs_dmx_edit and is_dmx:
@@ -1332,7 +1396,7 @@ class QCProcessor:
                             raise QCCompileError(f"Line {line_num}: $model mesh edit failed: {e}")
                     elif needs_dmx_edit and not is_dmx:
                         self._warn(
-                            f"Line {line_num}: $model removemesh/visiblemesh requires a DMX mesh, "
+                            f"Line {line_num}: $model excludemesh/isolatemesh requires a DMX mesh, "
                             f"skipping edits for '{mesh_raw}'"
                         )
 
@@ -1370,7 +1434,7 @@ class QCProcessor:
                         res_content = res_content.replace(f'"{mesh_raw}"', f'"{final_mesh_path}"', 1)
 
                     for err in errs:
-                        output_lines.append(f"// ERROR Line {line_num}: {err}\n")
+                        self._add_diagnostic("error", line_num, err)
                     if count > 0 and self.logger:
                         self.logger.info(f"Constructed {count} flex controllers from {dmx_path.name}")
                     output_lines.append(res_content)
@@ -1411,10 +1475,10 @@ class QCProcessor:
                                 output_lines.append(f'$hierarchy "{bone_name}" {parent}\n')
                             else:
                                 if self.logger: self.logger.warn(f"Line {line_num}: bone '{bone_name}' not found in '{dmx_raw}'")
-                                output_lines.append(f"// WARNING: bone '{bone_name}' not found\n")
+                                self._add_diagnostic("warning", line_num, f"bone '{bone_name}' not found in '{dmx_raw}'")
                     else:
                         if self.logger: self.logger.warn(f"Line {line_num}: no frames found in '{dmx_raw}'")
-                        output_lines.append(f"// WARNING: no frames found in '{dmx_raw}'\n")
+                        self._add_diagnostic("warning", line_num, f"no frames found in '{dmx_raw}'")
                 except Exception as e:
                     raise QCCompileError(f"Line {line_num}: Failed to read '{dmx_raw}': {e}")
                 continue
@@ -1472,10 +1536,10 @@ class QCProcessor:
                                 )
                             else:
                                 if self.logger: self.logger.warn(f"Line {line_num}: bone '{bone_name}' not found in '{dmx_raw}'")
-                                output_lines.append(f"// WARNING: bone '{bone_name}' not found\n")
+                                self._add_diagnostic("warning", line_num, f"bone '{bone_name}' not found in '{dmx_raw}'")
                     else:
                         if self.logger: self.logger.warn(f"Line {line_num}: frame index {frame_idx} out of range in '{dmx_raw}'")
-                        output_lines.append(f"// WARNING: frame index {frame_idx} out of range in '{dmx_raw}'\n")
+                        self._add_diagnostic("warning", line_num, f"frame index {frame_idx} out of range in '{dmx_raw}'")
                 except QCCompileError:
                     raise
                 except Exception as e:
@@ -1483,13 +1547,13 @@ class QCProcessor:
                 continue
 
             # ----------------------------------------------------------
-            # $body - optional removemesh / visiblemesh edit blocks
+            # $body - optional excludemesh / isolatemesh edit blocks
             # ----------------------------------------------------------
 
             if command == "$body":
                 lc_parts = [p.lower() for p in parts]
-                has_del  = "removemesh"  in lc_parts
-                has_kom  = "keeponlymesh" in lc_parts
+                has_del  = bool(_EXCLUDE_MESH_KEYWORDS & set(lc_parts))
+                has_kom  = bool(_ISOLATE_MESH_KEYWORDS & set(lc_parts))
 
                 if (has_del or has_kom) and len(parts) >= 3:
                     body_name = parts[1].strip('"')
@@ -1507,13 +1571,17 @@ class QCProcessor:
 
                     del_names, keep_names = [], None
                     if has_del:
-                        cnt = self._extract_block_content(rest, "removemesh")
-                        if cnt is not None:
-                            del_names = self._parse_del_tokens(cnt)
+                        for _kw in _EXCLUDE_MESH_KEYWORDS:
+                            cnt = self._extract_block_content(rest, _kw)
+                            if cnt is not None:
+                                del_names = self._parse_del_tokens(cnt)
+                                break
                     if has_kom:
-                        cnt = self._extract_block_content(rest, "keeponlymesh")
-                        if cnt is not None:
-                            keep_names = self._parse_del_tokens(cnt)
+                        for _kw in _ISOLATE_MESH_KEYWORDS:
+                            cnt = self._extract_block_content(rest, _kw)
+                            if cnt is not None:
+                                keep_names = self._parse_del_tokens(cnt)
+                                break
 
                     dmx_path = self._resolve_mesh_path(mesh_raw, base_dir)
                     if not dmx_path:
@@ -1526,7 +1594,7 @@ class QCProcessor:
 
                     if dmx_path.suffix.lower() != ".dmx":
                         self._warn(
-                            f"Line {line_num}: $body removemesh requires a DMX mesh, "
+                            f"Line {line_num}: $body excludemesh/isolatemesh requires a DMX mesh, "
                             f"skipping edits for '{mesh_raw}'"
                         )
                         output_lines.append(f'$body "{body_name}" "{file_str}"\n')
@@ -1583,7 +1651,7 @@ class QCProcessor:
                         if tl == "ignore_missing":
                             # handled as keyword=value on its own line; treat bare presence as true
                             ignore_missing = True
-                        elif tl not in ("replace", "suffix", "prefix", "removemesh", "keeponlymesh"):
+                        elif tl not in ({"replace", "suffix", "prefix"} | _EXCLUDE_MESH_KEYWORDS | _ISOLATE_MESH_KEYWORDS):
                             mesh_entries.append((t, [], None))
 
                 if depth > 0:
@@ -1614,11 +1682,11 @@ class QCProcessor:
                             continue
 
                         # Mesh entry: first token is the name; subsequent tokens may include
-                        # removemesh / visiblemesh block keywords.
+                        # excludemesh / isolatemesh block keywords.
                         mesh_name = toks[0].strip('"')
                         lc_toks   = [t.lower() for t in toks]
-                        has_del   = "removemesh"  in lc_toks
-                        has_kom   = "keeponlymesh" in lc_toks
+                        has_del   = bool(_EXCLUDE_MESH_KEYWORDS & set(lc_toks))
+                        has_kom   = bool(_ISOLATE_MESH_KEYWORDS & set(lc_toks))
 
                         if has_del or has_kom:
                             # Collect rest of entry, gathering continuation lines for multi-line blocks.
@@ -1632,13 +1700,17 @@ class QCProcessor:
 
                             del_names, keep_names = [], None
                             if has_del:
-                                cnt = self._extract_block_content(rest, "removemesh")
-                                if cnt is not None:
-                                    del_names = self._parse_del_tokens(cnt)
+                                for _kw in _EXCLUDE_MESH_KEYWORDS:
+                                    cnt = self._extract_block_content(rest, _kw)
+                                    if cnt is not None:
+                                        del_names = self._parse_del_tokens(cnt)
+                                        break
                             if has_kom:
-                                cnt = self._extract_block_content(rest, "keeponlymesh")
-                                if cnt is not None:
-                                    keep_names = self._parse_del_tokens(cnt)
+                                for _kw in _ISOLATE_MESH_KEYWORDS:
+                                    cnt = self._extract_block_content(rest, _kw)
+                                    if cnt is not None:
+                                        keep_names = self._parse_del_tokens(cnt)
+                                        break
                             mesh_entries.append((mesh_name, del_names, keep_names))
                         else:
                             # Plain line: all tokens are mesh names (skip stray "}")
@@ -1658,7 +1730,7 @@ class QCProcessor:
                     else:
                         file_str = mesh_name + ".dmx" if not Path(mesh_name).suffix else mesh_name
 
-                    # Apply removemesh edits if present
+                    # Apply excludemesh/isolatemesh edits if present
                     if (del_names or keep_names is not None) and dmx_path:
                         if dmx_path.suffix.lower() != ".dmx":
                             self._warn(
@@ -1681,16 +1753,16 @@ class QCProcessor:
                     if not dmx_path:
                         if ignore_missing:
                             if self.logger: self.logger.warn(f"Line {line_num}: $rendermeshlist '{mesh_name}' not found, skipping")
-                            output_lines.append(f"// WARNING: '{mesh_name}' not found\n")
+                            self._add_diagnostic("warning", line_num, f"$rendermeshlist '{mesh_name}' not found, skipping")
                             output_lines.append(f'// $body "{body_name}" "{file_str}"\n')
                             continue
                         else:
                             if self.logger: self.logger.warn(f"Line {line_num}: $rendermeshlist could not resolve '{mesh_name}'")
-                            output_lines.append(f"// WARNING Line {line_num}: $rendermeshlist could not resolve '{mesh_name}'\n")
+                            self._add_diagnostic("warning", line_num, f"$rendermeshlist could not resolve '{mesh_name}'")
 
                     output_lines.append(f'$body "{body_name}" "{file_str}"\n')
 
-                    # Variants intentionally do not inherit removemesh edits.
+                    # Variants intentionally do not inherit excludemesh/isolatemesh edits.
                     for vtype, vstring in variants:
                         p = Path(file_str)
                         if vtype == "suffix":
@@ -1702,7 +1774,7 @@ class QCProcessor:
 
                         if ignore_missing and not self._resolve_mesh_path(var_file, base_dir):
                             if self.logger: self.logger.warn(f"Line {line_num}: $rendermeshlist variant '{var_file}' not found, skipping")
-                            output_lines.append(f"// WARNING: variant '{var_file}' not found\n")
+                            self._add_diagnostic("warning", line_num, f"$rendermeshlist variant '{var_file}' not found, skipping")
                             output_lines.append(f'// $body "{var_body}" "{var_file}"\n')
                         else:
                             output_lines.append(f'$body "{var_body}" "{var_file}"\n')
@@ -1710,7 +1782,7 @@ class QCProcessor:
                 continue
 
             # ----------------------------------------------------------
-            # $bodygroup - handle studio ... visiblemesh { } / removemesh { } sub-blocks
+            # $bodygroup - handle studio ... excludemesh { } / isolatemesh { } sub-blocks
             # ----------------------------------------------------------
 
             if command == "$bodygroup":
@@ -1795,25 +1867,56 @@ def _format_qc_output(text: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Header block builder
+# ---------------------------------------------------------------------------
+
+def _build_qc_header(
+    diagnostics: list[tuple[str, int | None, str]],
+    qc_name: str,
+    version: str,
+    builddate: str,
+) -> str:
+    sep   = "// " + "-" * 61
+    lines = [
+        sep,
+        f"// KITSUNERESOURCE v{version} ({builddate})  -  {qc_name}",
+        "// Preprocessed QC - edit the original source, not this file.",
+        "//",
+    ]
+    for level in ("warning", "error", "message"):
+        subset = [(ln, msg) for lv, ln, msg in diagnostics if lv == level]
+        lines.append(f"// {level}:")
+        for ln, msg in subset:
+            prefix = f"line {ln} : " if ln is not None else ""
+            lines.append(f"//    - {prefix}{msg}")
+        lines.append("//")
+    lines.append(sep)
+    lines.append("")
+    return "\n".join(lines) + "\n"
+
+
+# ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
 
 def process_qc_file(
     qc_path: Path,
-    _include_stack: set   = None,
-    _variables: dict      = None,
-    _macros: dict         = None,
-    logger                = None,
-    _defined_vars: set    = None,
-    include_dirs: list    = None,
-    _root_dir: Path       = None,
-    _pushd_stack: list    = None,
+    _include_stack: set    = None,
+    _variables: dict       = None,
+    _macros: dict          = None,
+    logger                 = None,
+    _defined_vars: set     = None,
+    include_dirs: list     = None,
+    _root_dir: Path        = None,
+    _pushd_stack: list     = None,
     _vrd_name_counts: dict = None,
-    _current_scale: float = 1.0,
-    compiler: str         = None,
-    vrd_prefix: str       = None,
+    _current_scale: float  = 1.0,
+    compiler: str          = None,
+    vrd_prefix: str        = None,
+    _shared_diagnostics: list = None,
 ) -> str:
 
+    is_toplevel    = (_include_stack is None)
     _include_stack = _include_stack or set()
     _variables     = _variables     or {}
     _macros        = _macros        or {}
@@ -1840,8 +1943,11 @@ def process_qc_file(
                             compiler=compiler,
                             vrd_prefix=vrd_prefix)
 
-    processor.defined_vars  = _defined_vars
-    processor.pushd_stack   = _pushd_stack
+    if _shared_diagnostics is not None:
+        processor._diagnostics = _shared_diagnostics
+
+    processor.defined_vars    = _defined_vars
+    processor.pushd_stack     = _pushd_stack
     processor.vrd_name_counts = _vrd_name_counts if _vrd_name_counts is not None else {}
 
     with resolved.open("r", encoding="utf-8", errors="ignore") as f:
@@ -1852,10 +1958,15 @@ def process_qc_file(
     except QCCompileError as e:
         processor.error_count += 1
         if logger: logger.error(str(e))
-        output_lines = [f"// COMPILE ERROR: {e}\n"]
+        processor._add_diagnostic("error", None, f"COMPILE ERROR: {e}")
+        output_lines = []
 
     _include_stack.discard(resolved)
-    return _format_qc_output("".join(output_lines)), processor.error_count
+    body = _format_qc_output("".join(output_lines))
+    if is_toplevel:
+        header = _build_qc_header(processor._diagnostics, qc_path.name, SOFTVERSION, SOFTBUILDDATE)
+        return header + body, processor.error_count
+    return body, processor.error_count
 
 
 # ---------------------------------------------------------------------------

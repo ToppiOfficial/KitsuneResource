@@ -1,8 +1,6 @@
-name: Build
+name: Release
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 jobs:
@@ -43,11 +41,11 @@ jobs:
       - name: Upload executable artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kr-${{ github.run_number }}-${{ matrix.label }}
+          name: kr-release-${{ matrix.label }}
           path: dist/${{ matrix.artifact }}
           retention-days: 7
 
-  dev-release:
+  release:
     needs: build
     runs-on: ubuntu-latest
 
@@ -55,26 +53,24 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Read version
+        id: version
+        run: |
+          version=$(python3 -c "import json; print(json.load(open('version.json'))['version'])")
+          echo "version=$version" >> $GITHUB_OUTPUT
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist-all
 
-      - name: Delete previous dev release (if exists)
-        run: gh release delete dev --yes --cleanup-tag 2>/dev/null || true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Create dev release
+      - name: Create stable release
         run: |
-          stamp=$(date -u +"%Y-%m-%d %H:%M")
-          gh release create dev \
-            "dist-all/kr-${{ github.run_number }}-windows-x86_64/kitsuneresource.exe#KitsuneResource (Windows x86_64)" \
-            "dist-all/kr-${{ github.run_number }}-linux-x86_64/kitsuneresource#KitsuneResource (Linux x86_64)" \
-            "dist-all/kr-${{ github.run_number }}-linux-arm64/kitsuneresource#KitsuneResource (Linux arm64)" \
-            --title "Dev Build ($stamp UTC)" \
-            --notes "Automated build from commit ${{ github.sha }}" \
-            --prerelease \
+          gh release create "v${{ steps.version.outputs.version }}" \
+            "dist-all/kr-release-windows-x86_64/kitsuneresource.exe#KitsuneResource (Windows x86_64)" \
+            "dist-all/kr-release-linux-x86_64/kitsuneresource#KitsuneResource (Linux x86_64)" \
+            "dist-all/kr-release-linux-arm64/kitsuneresource#KitsuneResource (Linux arm64)" \
+            --title "KitsuneResource v${{ steps.version.outputs.version }}" \
             --target ${{ github.sha }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -17,11 +17,11 @@ def _validate_gmad(folder: Path) -> str | None:
 
 
 _TOOL_REGISTRY: dict[str, dict] = {
-    "vpk.exe": {
+    "vpk": {
         "name": "VPK",
         "build_cmd": _build_vpk_cmd,
     },
-    "gmad.exe": {
+    "gmad": {
         "name": "GMAD",
         "build_cmd": _build_gmad_cmd,
         "validate": _validate_gmad,
@@ -39,7 +39,7 @@ def package_archive(exe: Path, folder: Path, logger: Logger = None, verbose=Fals
     :param verbose: If True, show stdout/stderr
     :param kwargs: Extra args forwarded to the command builder (tool-specific)
     """
-    tool = _TOOL_REGISTRY.get(exe.name.lower())
+    tool = _TOOL_REGISTRY.get(exe.stem.lower())
     pack_logger = logger.with_context("PACKAGER") if logger else None
 
     if tool is None:

@@ -24,7 +24,7 @@ def process_direct_qc(qc_path_str: str, logger: Logger):
     qc_path = Path(qc_path_str).resolve()
     logger.info(f"Processing direct QC file: {qc_path.name}")
     try:
-        qc_content = process_qc_file(qc_path, logger=logger)
+        qc_content, _ = process_qc_file(qc_path, logger=logger)
         processed_dir = qc_path.parent / "processed-qc"
         processed_dir.mkdir(parents=True, exist_ok=True)
         out_path = processed_dir / qc_path.name

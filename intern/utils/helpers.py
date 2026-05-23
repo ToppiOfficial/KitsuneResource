@@ -38,19 +38,52 @@ def timer(func):
     return wrapper
 
 
+def _colorize_art(lines):
+    RESET = "\033[0m"
+    start = (255, 130, 0)
+    end   = (255, 245, 150)
+    max_w = max((len(l) for l in lines if l.strip()), default=1)
+    result = []
+    for line in lines:
+        row = []
+        for i, ch in enumerate(line):
+            if ch != ' ':
+                t = i / max(max_w - 1, 1)
+                r = int(start[0] + t * (end[0] - start[0]))
+                g = int(start[1] + t * (end[1] - start[1]))
+                b = int(start[2] + t * (end[2] - start[2]))
+                row.append(f"\033[38;2;{r};{g};{b}m{ch}")
+            else:
+                row.append(ch)
+        row.append(RESET)
+        result.append("".join(row))
+    return result
+
+
 def print_header():
-    ascii_art = r"""
-  _  _______ _______ _____ _    _ _   _ ______ _____  ______  _____  ____  _    _ _____   _____ ______
- | |/ /_   _|__   __/ ____| |  | | \ | |  ____|  __ \|  ____|/ ____|/ __ \| |  | |  __ \ / ____|  ____|
- | ' /  | |    | | | (___ | |  | |  \| | |__  | |__) | |__  | (___ | |  | | |  | | |__) | |    | |__
- |  <   | |    | |  \___ \| |  | | . ` |  __| |  _  /|  __|  \___ \| |  | | |  | |  _  /| |    |  __|
- | . \ _| |_   | |  ____) | |__| | |\  | |____| | \ \| |____ ____) | |__| | |__| | | \ \| |____| |____
- |_|\_\_____|  |_| |_____/ \____/|_| \_|______|_|  \_\______|_____/ \____/ \____/|_|  \_\\_____|______|
+    kitsune_raw = [
+        "██╗  ██╗██╗████████╗███████╗██╗   ██╗███╗   ██╗███████╗",
+        "██║ ██╔╝██║╚══██╔══╝██╔════╝██║   ██║████╗  ██║██╔════╝",
+        "█████╔╝ ██║   ██║   ███████╗██║   ██║██╔██╗ ██║█████╗  ",
+        "██╔═██╗ ██║   ██║   ╚════██║██║   ██║██║╚██╗██║██╔══╝  ",
+        "██║  ██╗██║   ██║   ███████║╚██████╔╝██║ ╚████║███████╗",
+        "╚═╝  ╚═╝╚═╝   ╚═╝   ╚══════╝ ╚═════╝ ╚═╝  ╚═══╝╚══════╝",
+    ]
+    resource_raw = [
+        "██████╗  ███████╗███████╗ ██████╗ ██╗   ██╗██████╗   ██████╗███████╗",
+        "██╔══██╗ ██╔════╝██╔════╝██╔═══██╗██║   ██║██╔══██╗ ██╔════╝██╔════╝",
+        "███████╔╝█████╗  ███████╗██║   ██║██║   ██║███████╔╝██║     █████╗  ",
+        "██╔══██╗ ██╔══╝  ╚════██║██║   ██║██║   ██║██╔══██╗ ██║     ██╔══╝  ",
+        "██║  ██║ ███████╗███████║╚██████╔╝╚██████╔╝██║  ██║ ╚██████╗███████╗",
+        "╚═╝  ╚═╝ ╚══════╝╚══════╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝  ╚═════╝╚══════╝",
+    ]
 
-"""
+    max_w = max(len(l) for l in resource_raw)
+    all_lines = [l.center(max_w) for l in kitsune_raw] + [""] + resource_raw
+    colored = _colorize_art(all_lines)
 
-    art_lines = ascii_art.splitlines()
-    max_width = max(len(line) for line in art_lines)
+    GOLD = "\033[38;2;255;200;80m"
+    RESET = "\033[0m"
 
     if IS_DEV_BUILD:
         extra_lines = [f"KitsuneResource {SOFTVERSION} dev"]
@@ -60,6 +93,9 @@ def print_header():
             f"SHA256 {SOFTSHA256}",
         ]
 
-    centered_extra = "\n".join(line.center(max_width) for line in extra_lines)
-
-    print(ascii_art + centered_extra + "\n")
+    print()
+    print("\n".join(colored))
+    print()
+    for line in extra_lines:
+        print(f"{GOLD}{line.center(max_w)}{RESET}")
+    print()
