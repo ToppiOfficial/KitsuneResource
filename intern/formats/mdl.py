@@ -5,11 +5,14 @@ MDL_MAGIC = b'IDST'
 _TEXTURE_STRUCT_SIZE = 64  # sizeof(mstudiotexture_t)
 
 # Byte offsets within studiohdr_t (versions 44-49, stable across Source Engine titles)
-_OFF_VERSION      = 4
-_OFF_NUMTEXTURES  = 204
-_OFF_TEXTUREINDEX = 208
-_OFF_NUMCDTEX     = 212
-_OFF_CDTEXINDEX   = 216
+_OFF_VERSION          = 4
+_OFF_NUMTEXTURES      = 204
+_OFF_TEXTUREINDEX     = 208
+_OFF_NUMCDTEX         = 212
+_OFF_CDTEXINDEX       = 216
+_OFF_ANIMBLOCK_COUNT  = 352  # numanimblocks - non-zero means a .ani file was generated
+
+_VTX_EXTENSIONS = ['.dx11.vtx', '.dx90.vtx', '.dx80.vtx', '.sw.vtx', '.vtx']
 
 
 def read_mdl_materials(mdl_path: Path) -> tuple[list[str], list[str]]:
@@ -87,6 +90,30 @@ def build_material_paths(texture_names: list[str], cdmaterials: list[str]) -> li
 def get_mdl_material_paths(mdl_path: Path) -> list[str]:
     """Convenience wrapper: read MDL then return combined material paths."""
     return build_material_paths(*read_mdl_materials(mdl_path))
+
+
+def get_model_companion_files(mdl_path: Path) -> list[Path]:
+    """
+    Return expected companion-file paths for a compiled MDL.
+
+    Reads animBlockCount to include .ani only when the model uses external anim blocks.
+    Does not filter by existence - caller decides what to do with missing paths.
+    """
+    data = mdl_path.read_bytes()
+    if len(data) < _OFF_ANIMBLOCK_COUNT + 4 or data[:4] != MDL_MAGIC:
+        return []
+
+    anim_block_count = struct.unpack_from('<i', data, _OFF_ANIMBLOCK_COUNT)[0]
+    stem = mdl_path.stem
+    parent = mdl_path.parent
+
+    companions: list[Path] = [parent / f"{stem}.vvd"]
+    companions += [parent / f"{stem}{ext}" for ext in _VTX_EXTENSIONS]
+    companions.append(parent / f"{stem}.phy")
+    if anim_block_count > 0:
+        companions.append(parent / f"{stem}.ani")
+
+    return companions
 
 
 def _read_cstring(data: bytes, offset: int) -> str:

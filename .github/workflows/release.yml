@@ -11,6 +11,9 @@ jobs:
           - os: windows-latest
             artifact: kitsuneresource.exe
             label: windows-x86_64
+          - os: windows-11-arm
+            artifact: kitsuneresource.exe
+            label: windows-arm64
           - os: ubuntu-latest
             artifact: kitsuneresource
             label: linux-x86_64
@@ -41,7 +44,7 @@ jobs:
       - name: Upload executable artifact
         uses: actions/upload-artifact@v4
         with:
-          name: kr-release-${{ matrix.label }}
+          name: ${{ matrix.label }}
           path: dist/${{ matrix.artifact }}
           retention-days: 7
 
@@ -74,14 +77,16 @@ jobs:
 
       - name: Rename assets
         run: |
-          cp "dist-all/kr-release-windows-x86_64/kitsuneresource.exe" dist-all/kitsuneresource-windows-x86_64.exe
-          cp "dist-all/kr-release-linux-x86_64/kitsuneresource"       dist-all/kitsuneresource-linux-x86_64
-          cp "dist-all/kr-release-linux-arm64/kitsuneresource"        dist-all/kitsuneresource-linux-arm64
+          for label in windows-x86_64 windows-arm64 linux-x86_64 linux-arm64; do
+            ext=$([[ "$label" == windows-* ]] && echo ".exe" || echo "")
+            cp "dist-all/${label}/kitsuneresource${ext}" "dist-all/kitsuneresource-${label}${ext}"
+          done
 
       - name: Upload release assets
         run: |
           gh release upload "v${{ steps.version.outputs.version }}" --clobber \
             "dist-all/kitsuneresource-windows-x86_64.exe#KitsuneResource (Windows x86_64)" \
+            "dist-all/kitsuneresource-windows-arm64.exe#KitsuneResource (Windows arm64)" \
             "dist-all/kitsuneresource-linux-x86_64#KitsuneResource (Linux x86_64)" \
             "dist-all/kitsuneresource-linux-arm64#KitsuneResource (Linux arm64)"
         env:

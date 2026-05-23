@@ -10,12 +10,13 @@ from intern.assets.image import convert_image
 
 class DataProcessor:
     def __init__(self, compile_root: Path, vtfcmd_exe: Optional[Path], args,
-                 logger: Logger, include_dirs: list = None):
+                 logger: Logger, include_dirs: list = None, wine_prefix: list = None):
         self.compile_root = compile_root
         self.vtfcmd_exe = vtfcmd_exe
         self.args = args
         self.logger = logger.with_context("DATA")
         self.include_dirs = include_dirs or []
+        self.wine_prefix = wine_prefix or []
         self.handlers = [
             self._handle_text_replacement,
             self._handle_vtf_export,
@@ -89,6 +90,7 @@ class DataProcessor:
                     flags=vtf_data.get("flags", []) if vtf_data else [],
                     extra_args=vtf_data.get("encoder_args", []) if vtf_data else [],
                     silent=True,
+                    wine_prefix=self.wine_prefix,
                 )
                 self.logger.info(f"VTF export: {input_path.name} -> {output_path.name}")
             except Exception as e:

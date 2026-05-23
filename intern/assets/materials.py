@@ -512,6 +512,7 @@ def export_vtf(
     gamma_correction=None,
     extra_args=None,
     silent=True,
+    wine_prefix: list[str] = [],
 ):
     src_path = Path(src_path).resolve()
     dst_path = Path(dst_path).resolve()
@@ -535,7 +536,7 @@ def export_vtf(
         )
 
     try:
-        subprocess.run(args, check=True)
+        subprocess.run(wine_prefix + args, check=True)
     except subprocess.CalledProcessError:
         print(f"[ERROR] VTF conversion failed: {src_path} -> {dst_path}")
         raise

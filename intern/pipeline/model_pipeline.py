@@ -2,7 +2,7 @@ import shutil
 from pathlib import Path
 from typing import List, Optional, NamedTuple
 
-from intern.utils import Logger, PathResolver
+from intern.utils import Logger, PathResolver, get_wine_prefix, print_wine_badge
 from intern.formats.vpk import GameVPKCache
 from intern.assets.materials import copy_materials, map_materials_to_vmt
 from intern.formats.mdl import read_mdl_materials, build_material_paths
@@ -30,7 +30,8 @@ class ModelCompiler:
     def __init__(self, studiomdl_exe: Path, search_paths: List[Path],
                  vtfcmd_exe: Optional[Path], gameinfo_dir: Optional[Path],
                  args, logger: Logger, global_includedirs: list = None,
-                 moddir: Optional[Path] = None, vprojectdir: Optional[Path] = None):
+                 moddir: Optional[Path] = None, vprojectdir: Optional[Path] = None,
+                 wine_prefix: list = None):
         self.studiomdl_exe = studiomdl_exe
         self.search_paths = search_paths
         self.vtfcmd_exe = vtfcmd_exe
@@ -41,6 +42,7 @@ class ModelCompiler:
         self.global_includedirs = global_includedirs if global_includedirs is not None else []
         self.moddir = moddir
         self.vprojectdir = vprojectdir
+        self.wine_prefix = wine_prefix or []
 
     def _parse_model_defines(self, model_define_vars: dict) -> tuple[dict, dict]:
         regular_model_defines = {}
@@ -86,6 +88,7 @@ class ModelCompiler:
                                   else (self.vprojectdir or game_dir)),
                     verbose=self.args.verbose,
                     logger=logger,
+                    wine_prefix=self.wine_prefix,
                 )
         finally:
             if temp_qc.exists():
@@ -318,6 +321,7 @@ class ModelCompiler:
             processor = DataProcessor(
                 compile_root, self.vtfcmd_exe, self.args, self.logger,
                 include_dirs=self.global_includedirs,
+                wine_prefix=self.wine_prefix,
             )
             processor.process_items(subdata, output_dir)
 
@@ -356,6 +360,7 @@ class _PipelineTools(NamedTuple):
     packager_exe: Optional[Path]
     search_paths: List[Path]
     compile_root: Path
+    wine_prefix: list
 
 
 class ValveModelPipeline:
@@ -368,11 +373,14 @@ class ValveModelPipeline:
 
     def _prepare(self) -> Optional["_PipelineTools"]:
         studiomdl_exe, gameinfo_path, vtfcmd_exe, packager_exe = PathResolver.resolve_and_validate(
-            self.config, "studiomdl", "gameinfo", "vtfcmd", "packager"
+            self.config, "studiomdl", "gameinfo", "vtfcmd", "packager", logger=self.logger
         )
 
         if not studiomdl_exe:
-            self.logger.error("Config missing required field: studiomdl")
+            if not self.config.get("studiomdl"):
+                self.logger.error("Config missing required field: studiomdl")
+            else:
+                self.logger.error("Cannot continue: studiomdl executable not found")
             return None
 
         if isinstance(self.args.game, str):
@@ -435,6 +443,20 @@ class ValveModelPipeline:
         if vtfcmd_exe:
             self.logger.info(f"VTF conversion enabled: {vtfcmd_exe}")
 
+        wine_prefix = get_wine_prefix(self.config)
+        if wine_prefix:
+            self.logger.info(f"Wine prefix: {' '.join(wine_prefix)}")
+
+        import sys as _sys
+        if _sys.platform != "win32" and not wine_prefix:
+            for _, exe in [("studiomdl", studiomdl_exe), ("vtfcmd", vtfcmd_exe),
+                           ("packager", packager_exe)]:
+                if exe and exe.suffix.lower() == ".exe":
+                    self.logger.warn(
+                        f"'{exe.name}' is a Windows executable. "
+                        "Set 'wine_cmd' in config to run it via Wine."
+                    )
+
         return _PipelineTools(
             studiomdl_exe=studiomdl_exe,
             gameinfo_dir=gameinfo_dir,
@@ -442,6 +464,7 @@ class ValveModelPipeline:
             packager_exe=packager_exe,
             search_paths=search_paths,
             compile_root=compile_root,
+            wine_prefix=wine_prefix,
         )
 
     def _make_compiler(self, tools: "_PipelineTools") -> "ModelCompiler":
@@ -458,6 +481,7 @@ class ValveModelPipeline:
             global_includedirs=global_includedirs,
             moddir=Path(moddir_val).resolve() if moddir_val else None,
             vprojectdir=Path(vprojectdir_val).resolve() if vprojectdir_val else None,
+            wine_prefix=tools.wine_prefix,
         )
 
     # ── Process ──────────────────────────────────────────────────────────────
@@ -513,10 +537,11 @@ class ValveModelPipeline:
         for set_name, set_data in self.config.get("material", {}).items():
             MaterialSetCopier.copy_set(set_name, set_data, compile_root, search_paths, self.logger)
 
-    def _process_data_sections(self, compile_root: Path, vtfcmd_exe: Optional[Path]):
+    def _process_data_sections(self, compile_root: Path, vtfcmd_exe: Optional[Path],
+                               wine_prefix: list = []):
         include_dirs = self.config.get("includedirs", [])
         processor = DataProcessor(compile_root, vtfcmd_exe, self.args, self.logger,
-                                  include_dirs=include_dirs)
+                                  include_dirs=include_dirs, wine_prefix=wine_prefix)
         only_filter = [e.lower() for e in self.args.only] if self.args.only else None
 
         for folder_name, items in self.config.get("data", {}).items():
@@ -527,7 +552,8 @@ class ValveModelPipeline:
             processor.process_items(items, output_dir)
             self.logger.root.data_compiled += 1
 
-    def _package_archives(self, compile_root: Path, packager_exe: Optional[Path]):
+    def _package_archives(self, compile_root: Path, packager_exe: Optional[Path],
+                          wine_prefix: list = []):
         if not packager_exe:
             self.logger.warn(
                 "Packager executable not found or missing in config, skipping packaging"
@@ -535,15 +561,19 @@ class ValveModelPipeline:
             return
 
         if self.args.single_addon:
-            package_archive(packager_exe, compile_root, self.logger)
+            package_archive(packager_exe, compile_root, self.logger, wine_prefix=wine_prefix)
         else:
             for subfolder in compile_root.iterdir():
                 if subfolder.is_dir():
-                    package_archive(packager_exe, subfolder, self.logger)
+                    package_archive(packager_exe, subfolder, self.logger, wine_prefix=wine_prefix)
 
     # ── Orchestration ─────────────────────────────────────────────────────────
 
     def execute(self):
+        wp = get_wine_prefix(self.config)
+        if wp:
+            print_wine_badge(wp)
+
         tools = self._prepare()
         if tools is None:
             return
@@ -557,7 +587,7 @@ class ValveModelPipeline:
 
         self._process_all_materials(compiler, compile_results, tools)
         self._process_material_sets(tools.compile_root, tools.search_paths)
-        self._process_data_sections(tools.compile_root, tools.vtfcmd_exe)
+        self._process_data_sections(tools.compile_root, tools.vtfcmd_exe, tools.wine_prefix)
 
         if self.args.package_files:
-            self._package_archives(tools.compile_root, tools.packager_exe)
+            self._package_archives(tools.compile_root, tools.packager_exe, tools.wine_prefix)

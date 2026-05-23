@@ -5,8 +5,14 @@ KitsuneResource is a Python-based software for compiling and packaging Source En
 
 ## COMPATIBILITY
 
-- Operating System: Windows 10+ or Linux (via Wine 9.0 for Windows executables)
-- Python: Version 3.10 or newer
+| Platform | Architecture | Support |
+| --- | --- | --- |
+| Windows 10+ | x86-64, ARM64 | Native |
+| Linux | x86-64 | Native (Wine required for `.exe` tools) |
+| Linux | ARM64 | Native (Wine + Box64 required for `.exe` tools) |
+| macOS 12+ | x86-64, Apple Silicon | Native (Wine required, e.g. Whisky / CrossOver) |
+
+- Python: Version 3.10 or newer (not needed when using the pre-built binary)
 
 ## DEPENDENCIES
 
@@ -15,21 +21,84 @@ The following tools must be available in your system path or specified in your c
 - `vtfcmd.exe` (Provided by [VTFLib](https://github.com/NeilJed/VTFLib))
 - `vpk.exe` or `gmad.exe` (Provided in the `bin/` directory of a Source game)
 
+On Linux and macOS these are Windows binaries. They must be invoked via Wine using the `wine_cmd` config key (see **Running on Linux / macOS** below). If a native Linux build of any tool exists, it can be pointed to directly without `wine_cmd`.
+
 ## BUILD
 
 ```bash
-git clone [https://github.com/ToppiOfficial/KitsuneResource.git](https://github.com/ToppiOfficial/KitsuneResource.git)
+git clone https://github.com/ToppiOfficial/KitsuneResource.git
 cd KitsuneResource
 pip install -r requirements.txt
 python build.py
 ```
 
+Produces `dist/kitsuneresource.exe` on Windows or `dist/kitsuneresource` on Linux/macOS.
+
 ## USAGE
 
-```cmd
-python main.py [options] <config.json>|<model.qc> ...
-kitsuneresource.exe [options] <config.json>|<model.qc> ...
 ```
+python main.py [options] <config.json>|<model.qc> ...
+kitsuneresource[.exe] [options] <config.json>|<model.qc> ...
+```
+
+## RUNNING ON LINUX / MACOS
+
+### Option A - Python source (no build needed)
+
+```bash
+git clone https://github.com/ToppiOfficial/KitsuneResource.git
+cd KitsuneResource
+pip install -r requirements.txt
+python main.py [options] <config.json>
+```
+
+`main.py` auto-activates a local `venv/` if one exists and works identically to the Windows version. All Windows-only dependencies (`pefile`, `pywin32-ctypes`) are excluded automatically via `requirements.txt` markers.
+
+### Option B - Pre-built binary
+
+Download the `kitsuneresource` artifact (no `.exe`) for your architecture from the [releases page](https://github.com/ToppiOfficial/KitsuneResource/releases). No Python installation needed.
+
+### Wine setup for Source Engine tools
+
+The KitsuneResource app itself runs natively. The Source Engine tools (`studiomdl.exe`, `vtfcmd.exe`, `vpk.exe`, `gmad.exe`) are Windows binaries and require a compatibility layer.
+
+**Linux x86-64**
+
+1. Install Wine:
+   ```bash
+   sudo apt install wine   # Debian / Ubuntu
+   ```
+2. Add `wine_cmd` to your config JSON:
+   ```json
+   {
+     "wine_cmd": "wine",
+     "studiomdl": "/path/to/studiomdl.exe",
+     "vtfcmd":    "/path/to/vtfcmd.exe"
+   }
+   ```
+
+**Linux ARM64**
+
+x86-64 Windows binaries require both Wine and [Box64](https://github.com/ptitSeb/box64) for instruction translation:
+
+```bash
+# install Box64 per its README, then:
+sudo apt install wine
+```
+
+```json
+{ "wine_cmd": "box64 wine" }
+```
+
+**macOS (Apple Silicon and Intel)**
+
+Use [Whisky](https://github.com/Whisky-App/Whisky) or [CrossOver](https://www.codeweavers.com/crossover) and point `wine_cmd` at their launch helper, for example:
+
+```json
+{ "wine_cmd": "/Applications/Whisky.app/Contents/MacOS/rosetta-wine" }
+```
+
+When `wine_cmd` is active a red banner is displayed below the header on startup confirming the command in use.
 
 ## COMMAND-LINE ARGUMENTS
 

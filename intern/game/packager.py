@@ -29,7 +29,8 @@ _TOOL_REGISTRY: dict[str, dict] = {
 }
 
 
-def package_archive(exe: Path, folder: Path, logger: Logger = None, verbose=False, **kwargs):
+def package_archive(exe: Path, folder: Path, logger: Logger = None, verbose=False,
+                    wine_prefix: list[str] = [], **kwargs):
     """
     Package a folder into an archive using a supported tool (vpk.exe, gmad.exe, ...).
 
@@ -61,7 +62,7 @@ def package_archive(exe: Path, folder: Path, logger: Logger = None, verbose=Fals
                 pack_logger.error(f"{tool_name} packaging failed: {error} in {folder}")
             return False
 
-    cmd = tool["build_cmd"](exe, folder, **kwargs)
+    cmd = wine_prefix + tool["build_cmd"](exe, folder, **kwargs)
 
     try:
         result = subprocess.run(

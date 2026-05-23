@@ -7,13 +7,22 @@ from .logger import Logger
 
 class PathResolver:
     @staticmethod
-    def resolve_and_validate(config: dict, *keys) -> List[Optional[Path]]:
+    def resolve_and_validate(config: dict, *keys, logger=None) -> List[Optional[Path]]:
         paths = []
         for key in keys:
             value = config.get(key)
             if value:
                 path = Path(value).resolve()
-                paths.append(path if path.exists() else None)
+                if path.exists():
+                    paths.append(path)
+                else:
+                    paths.append(None)
+                    if logger:
+                        msg = f"Path not found for '{key}': {path}"
+                        exe_candidate = path.with_suffix(".exe")
+                        if exe_candidate.exists():
+                            msg += f" - did you mean '{exe_candidate.name}'?"
+                        logger.warn(msg)
             else:
                 paths.append(None)
         return paths
@@ -87,6 +96,11 @@ def resolve_config_path(config_path_str: str, logger: Optional[Logger] = None) -
     resolved = str(found_files[0])
     log_info(f"Found config file: {resolved}")
     return resolved
+
+
+def get_wine_prefix(config: dict) -> list[str]:
+    wine_cmd = str(config.get("wine_cmd", "")).strip()
+    return wine_cmd.split() if wine_cmd else []
 
 
 def deep_merge(base: dict, override: dict) -> dict:

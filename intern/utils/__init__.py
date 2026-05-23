@@ -5,6 +5,6 @@ from .constants import (
 )
 from .config import (
     PathResolver, resolve_json_path, resolve_config_path,
-    deep_merge, parse_config_json,
+    deep_merge, parse_config_json, get_wine_prefix,
 )
-from .helpers import timer, print_header
+from .helpers import timer, print_header, print_wine_badge

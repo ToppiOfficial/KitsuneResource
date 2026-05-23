@@ -2,7 +2,7 @@ import re, os
 from pathlib import Path
 from typing import List, Set, Optional
 
-from intern.utils import Logger, PathResolver
+from intern.utils import Logger, PathResolver, get_wine_prefix, print_wine_badge
 from intern.assets.materials import export_vtf
 from intern.assets.texture_cache import TextureSignatureCache
 
@@ -14,13 +14,26 @@ class ValveTexturePipeline:
         self.logger = logger
         self.processed_files: Set[Path] = set()
         self._sig_cache: Optional[TextureSignatureCache] = None
+        self.wine_prefix = get_wine_prefix(config)
 
     def execute(self):
-        vtfcmd, = PathResolver.resolve_and_validate(self.config, "vtfcmd")
+        if self.wine_prefix:
+            print_wine_badge(self.wine_prefix)
+
+        import sys as _sys
+        vtfcmd, = PathResolver.resolve_and_validate(self.config, "vtfcmd", logger=self.logger)
 
         if not vtfcmd:
             self.logger.error("vtfcmd not found in config")
             return
+
+        if self.wine_prefix:
+            self.logger.info(f"Wine prefix: {' '.join(self.wine_prefix)}")
+        elif _sys.platform != "win32" and vtfcmd.suffix.lower() == ".exe":
+            self.logger.warn(
+                f"'{vtfcmd.name}' is a Windows executable. "
+                "Set 'wine_cmd' in config to run it via Wine."
+            )
 
         vtf_config = self.config.get("vtf", {})
         if not vtf_config:
@@ -125,6 +138,7 @@ class ValveTexturePipeline:
                 vtfcmd=vtfcmd,
                 flags=flags,
                 extra_args=extra_args,
+                wine_prefix=self.wine_prefix,
             )
             stat = src_file.stat()
             os.utime(output_path, (stat.st_atime, stat.st_mtime))
