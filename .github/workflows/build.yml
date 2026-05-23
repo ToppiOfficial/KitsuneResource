@@ -69,12 +69,24 @@ jobs:
         run: |
           stamp=$(date -u +"%Y-%m-%d %H:%M")
           gh release create dev \
-            "dist-all/kr-${{ github.run_number }}-windows-x86_64/kitsuneresource.exe#KitsuneResource (Windows x86_64)" \
-            "dist-all/kr-${{ github.run_number }}-linux-x86_64/kitsuneresource#KitsuneResource (Linux x86_64)" \
-            "dist-all/kr-${{ github.run_number }}-linux-arm64/kitsuneresource#KitsuneResource (Linux arm64)" \
             --title "Dev Build ($stamp UTC)" \
             --notes "Automated build from commit ${{ github.sha }}" \
             --prerelease \
             --target ${{ github.sha }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Rename assets
+        run: |
+          cp "dist-all/kr-${{ github.run_number }}-windows-x86_64/kitsuneresource.exe" dist-all/kitsuneresource-windows-x86_64.exe
+          cp "dist-all/kr-${{ github.run_number }}-linux-x86_64/kitsuneresource"       dist-all/kitsuneresource-linux-x86_64
+          cp "dist-all/kr-${{ github.run_number }}-linux-arm64/kitsuneresource"        dist-all/kitsuneresource-linux-arm64
+
+      - name: Upload release assets
+        run: |
+          gh release upload dev --clobber \
+            "dist-all/kitsuneresource-windows-x86_64.exe#KitsuneResource (Windows x86_64)" \
+            "dist-all/kitsuneresource-linux-x86_64#KitsuneResource (Linux x86_64)" \
+            "dist-all/kitsuneresource-linux-arm64#KitsuneResource (Linux arm64)"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

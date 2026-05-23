@@ -67,10 +67,22 @@ jobs:
       - name: Create stable release
         run: |
           gh release create "v${{ steps.version.outputs.version }}" \
-            "dist-all/kr-release-windows-x86_64/kitsuneresource.exe#KitsuneResource (Windows x86_64)" \
-            "dist-all/kr-release-linux-x86_64/kitsuneresource#KitsuneResource (Linux x86_64)" \
-            "dist-all/kr-release-linux-arm64/kitsuneresource#KitsuneResource (Linux arm64)" \
             --title "KitsuneResource v${{ steps.version.outputs.version }}" \
             --target ${{ github.sha }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Rename assets
+        run: |
+          cp "dist-all/kr-release-windows-x86_64/kitsuneresource.exe" dist-all/kitsuneresource-windows-x86_64.exe
+          cp "dist-all/kr-release-linux-x86_64/kitsuneresource"       dist-all/kitsuneresource-linux-x86_64
+          cp "dist-all/kr-release-linux-arm64/kitsuneresource"        dist-all/kitsuneresource-linux-arm64
+
+      - name: Upload release assets
+        run: |
+          gh release upload "v${{ steps.version.outputs.version }}" --clobber \
+            "dist-all/kitsuneresource-windows-x86_64.exe#KitsuneResource (Windows x86_64)" \
+            "dist-all/kitsuneresource-linux-x86_64#KitsuneResource (Linux x86_64)" \
+            "dist-all/kitsuneresource-linux-arm64#KitsuneResource (Linux arm64)"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
