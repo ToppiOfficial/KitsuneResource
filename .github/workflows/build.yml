@@ -22,6 +22,12 @@ jobs:
           - os: ubuntu-24.04-arm
             artifact: kitsuneresource
             label: linux-arm64
+          - os: macos-13
+            artifact: kitsuneresource
+            label: macos-x86_64
+          - os: macos-latest
+            artifact: kitsuneresource
+            label: macos-arm64
 
     runs-on: ${{ matrix.os }}
 
@@ -81,7 +87,7 @@ jobs:
 
       - name: Rename assets
         run: |
-          for label in windows-x86_64 windows-arm64 linux-x86_64 linux-arm64; do
+          for label in windows-x86_64 windows-arm64 linux-x86_64 linux-arm64 macos-x86_64 macos-arm64; do
             ext=$([[ "$label" == windows-* ]] && echo ".exe" || echo "")
             cp "dist-all/${label}/kitsuneresource${ext}" "dist-all/kitsuneresource-${label}${ext}"
           done
@@ -92,6 +98,8 @@ jobs:
             "dist-all/kitsuneresource-windows-x86_64.exe#KitsuneResource (Windows x86_64)" \
             "dist-all/kitsuneresource-windows-arm64.exe#KitsuneResource (Windows arm64)" \
             "dist-all/kitsuneresource-linux-x86_64#KitsuneResource (Linux x86_64)" \
-            "dist-all/kitsuneresource-linux-arm64#KitsuneResource (Linux arm64)"
+            "dist-all/kitsuneresource-linux-arm64#KitsuneResource (Linux arm64)" \
+            "dist-all/kitsuneresource-macos-x86_64#KitsuneResource (macOS x86_64)" \
+            "dist-all/kitsuneresource-macos-arm64#KitsuneResource (macOS arm64)"
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
