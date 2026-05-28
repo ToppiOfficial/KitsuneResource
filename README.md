@@ -8,9 +8,8 @@ KitsuneResource is a Python-based software for compiling and packaging Source En
 | Platform | Architecture | Support |
 | --- | --- | --- |
 | Windows 10+ | x86-64, ARM64 | Native |
-| Linux | x86-64 | Native (Wine required for `.exe` tools) |
-| Linux | ARM64 | Native (Wine + Box64 required for `.exe` tools) |
-| macOS 12+ | x86-64, Apple Silicon | Native (Wine required, e.g. Whisky / CrossOver) |
+| Linux | x86-64 | (Wine required for `.exe` tools) |
+| Linux | ARM64 | (Wine + Box64 required for `.exe` tools) |
 
 - Python: Version 3.10 or newer (not needed when using the pre-built binary)
 
@@ -21,7 +20,7 @@ The following tools must be available in your system path or specified in your c
 - `vtfcmd.exe` (Provided by [VTFLib](https://github.com/NeilJed/VTFLib))
 - `vpk.exe` or `gmad.exe` (Provided in the `bin/` directory of a Source game)
 
-On Linux and macOS these are Windows binaries. They must be invoked via Wine using the `wine_cmd` config key (see **Running on Linux / macOS** below). If a native Linux build of any tool exists, it can be pointed to directly without `wine_cmd`.
+On Linux these are Windows binaries. They must be invoked via Wine using the `wine_cmd` config key (see **Running on Linux** below). If a native Linux build of any tool exists, it can be pointed to directly without `wine_cmd`.
 
 ## BUILD
 
@@ -32,7 +31,7 @@ pip install -r requirements.txt
 python build.py
 ```
 
-Produces `dist/kitsuneresource.exe` on Windows or `dist/kitsuneresource` on Linux/macOS.
+Produces `dist/kitsuneresource.exe` on Windows or `dist/kitsuneresource` on Linux.
 
 ## USAGE
 
@@ -41,7 +40,7 @@ python main.py [options] <config.json>|<model.qc> ...
 kitsuneresource[.exe] [options] <config.json>|<model.qc> ...
 ```
 
-## RUNNING ON LINUX / MACOS
+## RUNNING ON LINUX
 
 ### Option A - Python source (no build needed)
 
@@ -88,14 +87,6 @@ sudo apt install wine
 
 ```json
 { "wine_cmd": "box64 wine" }
-```
-
-**macOS (Apple Silicon and Intel)**
-
-Use [Whisky](https://github.com/Whisky-App/Whisky) or [CrossOver](https://www.codeweavers.com/crossover) and point `wine_cmd` at their launch helper, for example:
-
-```json
-{ "wine_cmd": "/Applications/Whisky.app/Contents/MacOS/rosetta-wine" }
 ```
 
 When `wine_cmd` is active a red banner is displayed below the header on startup confirming the command in use.
