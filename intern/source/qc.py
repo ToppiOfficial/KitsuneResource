@@ -578,6 +578,79 @@ class QCProcessor:
             self.logger.info(f"dmx edit: wrote '{out_path.name}'")
         return out_path
 
+    def _scale_vrd(self, vrd_path: Path, scale: float) -> Path:
+        """Create a scaled copy of a VRD file.
+
+        Scales <basepos> xyz values and the helper-location triplet (last 3 tokens)
+        of <trigger> lines.  Direction vectors (<aimvector>, <upvector>) and rotation
+        values are left unchanged.  The output filename is deterministic via CRC-32 of
+        the scale key so that identical inputs always produce the same file.
+        """
+        import zlib
+        crc      = zlib.crc32(f"scale:{scale:.6g}".encode()) & 0xFFFFFFFF
+        out_path = vrd_path.parent / f"{vrd_path.stem}_{crc:08x}.vrd"
+
+        if out_path.exists():
+            return out_path
+
+        out_lines = []
+        for raw in vrd_path.read_text(encoding="utf-8").splitlines():
+            low = raw.lstrip().lower()
+
+            if low.startswith("<basepos>"):
+                tag_end = raw.lower().find("<basepos>") + len("<basepos>")
+                vals    = raw[tag_end:].split()
+                if len(vals) >= 3:
+                    try:
+                        x, y, z = float(vals[0]) * scale, float(vals[1]) * scale, float(vals[2]) * scale
+                        out_lines.append(f"<basepos>       {x:.9f} {y:.9f} {z:.9f}")
+                        continue
+                    except ValueError:
+                        pass
+
+            elif low.startswith("<trigger>"):
+                tag_end = raw.lower().find("<trigger>") + len("<trigger>")
+                vals    = raw[tag_end:].split()
+                if len(vals) >= 10:
+                    try:
+                        vals[7] = f"{float(vals[7]) * scale:.6g}"
+                        vals[8] = f"{float(vals[8]) * scale:.6g}"
+                        vals[9] = f"{float(vals[9]) * scale:.6g}"
+                        out_lines.append(
+                            f"<trigger> {vals[0]} {vals[1]} {vals[2]} {vals[3]}"
+                            f" \t{vals[4]} {vals[5]} {vals[6]}"
+                            f" \t{vals[7]} {vals[8]} {vals[9]}"
+                            + ((" " + " ".join(vals[10:])) if len(vals) > 10 else "")
+                        )
+                        continue
+                    except ValueError:
+                        pass
+
+            out_lines.append(raw)
+
+        out_path.write_text("\n".join(out_lines), encoding="utf-8")
+        if self.logger:
+            self.logger.info(f"(VRD scaled x{scale:g}): {out_path.name}")
+        return out_path
+
+    def _parse_vrd_helper_bones(self, vrd_path: Path) -> list[str]:
+        """Return deduplicated helper bone names from a VRD file.
+
+        Extracts the first token from <helper> and <aimconstraint> lines — those
+        are the bones that need a corresponding $bonemerge in the QC.
+        """
+        seen  = set()
+        bones = []
+        for raw in vrd_path.read_text(encoding="utf-8").splitlines():
+            low = raw.lstrip().lower()
+            if low.startswith("<helper>") or low.startswith("<aimconstraint>"):
+                tag_end = raw.find(">") + 1
+                vals    = raw[tag_end:].split()
+                if vals and vals[0] not in seen:
+                    seen.add(vals[0])
+                    bones.append(vals[0])
+        return bones
+
     def _strip_block(self, text: str, keyword: str) -> tuple[Optional[str], str]:
         """
         Find the first ``keyword { ... }`` in *text*, extract its content,
@@ -1818,6 +1891,53 @@ class QCProcessor:
 
                 output_lines.extend(new_body)
                 continue
+
+            # ----------------------------------------------------------
+            # $proceduralbones - auto-bonemerge + scale pre-existing VRD
+            # ----------------------------------------------------------
+
+            if command == "$proceduralbones" and len(parts) >= 2:
+                vrd_raw  = parts[1].strip('"')
+                vrd_file = None
+                search_bases = (
+                    [self.pushd_stack[-1]] if self.pushd_stack else []
+                ) + (
+                    [self.root_dir] if self.root_dir else []
+                ) + [base_dir]
+                for search_base in search_bases:
+                    candidate = (search_base / vrd_raw).resolve()
+                    if candidate.exists():
+                        vrd_file = candidate
+                        break
+
+                if vrd_file:
+                    # Emit $bonemerge for any VRD helper bone not already in the QC.
+                    # Comparison is case-insensitive and prefix-stripped (e.g. "ns.Bone" == "Bone").
+                    existing_stripped = {b.split('.')[-1].lower() for b in new_bonemerge}
+                    for bone in self._parse_vrd_helper_bones(vrd_file):
+                        if bone.split('.')[-1].lower() not in existing_stripped:
+                            output_lines.append(f'$bonemerge "{bone}"\n')
+                            new_bonemerge.add(bone)
+                            existing_stripped.add(bone.split('.')[-1].lower())
+
+                    if self.current_scale != 1.0 and self.compiler != "nekomdl":
+                        try:
+                            scaled_path = self._scale_vrd(vrd_file, self.current_scale)
+                            orig_dir    = str(Path(vrd_raw).parent)
+                            rel_path    = (
+                                scaled_path.name if orig_dir == "."
+                                else f"{orig_dir}/{scaled_path.name}".replace("\\", "/")
+                            )
+                            output_lines.append(f'$proceduralbones "{rel_path}"\n')
+                            continue
+                        except Exception as e:
+                            self._warn(f"Line {line_num}: Failed to scale VRD '{vrd_raw}': {e}")
+                # VRD not found, scale not applicable, or scale error — fall through to passthrough
+
+            # Track manually-written $bonemerge lines so the $proceduralbones
+            # handler above can avoid emitting duplicates.
+            if command == "$bonemerge" and len(parts) >= 2:
+                new_bonemerge.add(parts[1].strip('"'))
 
             # ----------------------------------------------------------
             # Passthrough to inline command handler
