@@ -84,6 +84,73 @@ def _evaluate_condition(expression: str, variables: dict, is_ifdef: bool) -> boo
 
 
 # ---------------------------------------------------------------------------
+# $conditional expression tokenizer
+# ---------------------------------------------------------------------------
+
+_CTOK_AND, _CTOK_OR         = "AND", "OR"
+_CTOK_OP                    = "OP"
+_CTOK_LPAREN, _CTOK_RPAREN  = "LP", "RP"
+_CTOK_LBRACK, _CTOK_RBRACK  = "LB", "RB"
+_CTOK_COMMA                 = "COMMA"
+_CTOK_NUM, _CTOK_STR        = "NUM", "STR"
+_CTOK_IDENT, _CTOK_EOF      = "IDENT", "EOF"
+
+
+def _tokenize_cond_expr(expr: str) -> list[tuple[str, str]]:
+    tokens: list[tuple[str, str]] = []
+    i, n = 0, len(expr)
+    while i < n:
+        c = expr[i]
+        if c in " \t\r\n":
+            i += 1
+        elif expr[i:i+2] == "&&":
+            tokens.append((_CTOK_AND,    "&&")); i += 2
+        elif expr[i:i+2] == "||":
+            tokens.append((_CTOK_OR,     "||")); i += 2
+        elif expr[i:i+2] in ("==", "!=", ">=", "<="):
+            tokens.append((_CTOK_OP,     expr[i:i+2])); i += 2
+        elif c == ">":
+            tokens.append((_CTOK_OP,     ">")); i += 1
+        elif c == "<":
+            tokens.append((_CTOK_OP,     "<")); i += 1
+        elif c == "(":
+            tokens.append((_CTOK_LPAREN, "(")); i += 1
+        elif c == ")":
+            tokens.append((_CTOK_RPAREN, ")")); i += 1
+        elif c == "[":
+            tokens.append((_CTOK_LBRACK, "[")); i += 1
+        elif c == "]":
+            tokens.append((_CTOK_RBRACK, "]")); i += 1
+        elif c == ",":
+            tokens.append((_CTOK_COMMA,  ",")); i += 1
+        elif c in ('"', "'"):
+            q = c; i += 1; start = i
+            while i < n and expr[i] != q:
+                i += 1
+            tokens.append((_CTOK_STR, expr[start:i]))
+            if i < n: i += 1
+        elif c == "-" and i + 1 < n and (expr[i+1].isdigit() or expr[i+1] == "."):
+            start = i; i += 1
+            while i < n and (expr[i].isdigit() or expr[i] == "."):
+                i += 1
+            tokens.append((_CTOK_NUM, expr[start:i]))
+        elif c.isdigit() or c == ".":
+            start = i
+            while i < n and (expr[i].isdigit() or expr[i] == "."):
+                i += 1
+            tokens.append((_CTOK_NUM, expr[start:i]))
+        elif c.isalpha() or c == "_":
+            start = i
+            while i < n and (expr[i].isalnum() or expr[i] == "_"):
+                i += 1
+            tokens.append((_CTOK_IDENT, expr[start:i]))
+        else:
+            i += 1
+    tokens.append((_CTOK_EOF, ""))
+    return tokens
+
+
+# ---------------------------------------------------------------------------
 # Exceptions
 # ---------------------------------------------------------------------------
 
@@ -264,6 +331,314 @@ class QCProcessor:
                 return True
 
         return target.exists()
+
+    # ------------------------------------------------------------------
+    # $conditional expression evaluator
+    # ------------------------------------------------------------------
+
+    def _resolve_cond_path(self, path_str: str, base_dir: Path) -> Optional[Path]:
+        p = Path(path_str.strip().strip('"'))
+        bases = ([self.pushd_stack[-1]] if self.pushd_stack else []) + \
+                ([self.root_dir]        if self.root_dir   else []) + \
+                [base_dir]
+        for base in bases:
+            try:
+                c = (base / p).resolve()
+                if c.exists():
+                    return c
+            except Exception:
+                pass
+        return None
+
+    def _cond_skip_to_rparen(self, tokens: list, pos: int) -> int:
+        depth = 1
+        while pos < len(tokens):
+            t = tokens[pos][0]
+            if   t == _CTOK_LPAREN: depth += 1
+            elif t == _CTOK_RPAREN:
+                depth -= 1
+                if depth == 0:
+                    return pos + 1
+            elif t == _CTOK_EOF:
+                break
+            pos += 1
+        return pos
+
+    def _cond_eval_func(self, fname: str, tokens: list, pos: int,
+                        variables: dict, base_dir: Path) -> tuple:
+        """Evaluate a built-in function call. pos is at the first arg token (after LPAREN).
+        Returns (result, pos_after_closing_RPAREN)."""
+        fl = fname.lower()
+
+        def _consume_rp():
+            nonlocal pos
+            if pos < len(tokens) and tokens[pos][0] == _CTOK_RPAREN:
+                pos += 1
+
+        if fl == "not":
+            result, pos = self._cond_eval_or(tokens, pos, variables, base_dir)
+            _consume_rp()
+            return not result, pos
+
+        if fl == "none":
+            raw = tokens[pos][1] if pos < len(tokens) and tokens[pos][0] in (_CTOK_IDENT, _CTOK_STR, _CTOK_NUM) else ""
+            if raw: pos += 1
+            _consume_rp()
+            if raw in variables:
+                return str(variables[raw]).strip() in ("", "0", "false"), pos
+            return True, pos  # not defined → None
+
+        if fl in ("file", "dir"):
+            raw = tokens[pos][1] if pos < len(tokens) and tokens[pos][0] in (_CTOK_IDENT, _CTOK_STR, _CTOK_NUM) else ""
+            if raw: pos += 1
+            path_str = str(variables.get(raw, raw))
+            _consume_rp()
+            resolved = self._resolve_cond_path(path_str, base_dir)
+            return (resolved is not None and (resolved.is_file() if fl == "file" else resolved.is_dir())), pos
+
+        if fl == "inarray":
+            val, pos = self._cond_eval_atom(tokens, pos, variables, base_dir)
+            if pos < len(tokens) and tokens[pos][0] == _CTOK_COMMA:
+                pos += 1
+            arr: list = []
+            if pos < len(tokens) and tokens[pos][0] == _CTOK_LBRACK:
+                pos += 1
+                while pos < len(tokens) and tokens[pos][0] != _CTOK_RBRACK:
+                    tt, tv = tokens[pos]
+                    if tt == _CTOK_COMMA:
+                        pos += 1; continue
+                    if   tt == _CTOK_STR:   arr.append(tv)
+                    elif tt == _CTOK_IDENT: arr.append(str(variables.get(tv, tv)))
+                    elif tt == _CTOK_NUM:   arr.append(tv)
+                    elif tt == _CTOK_EOF:   break
+                    pos += 1
+                if pos < len(tokens) and tokens[pos][0] == _CTOK_RBRACK:
+                    pos += 1
+            _consume_rp()
+            val_s = str(val)
+            for elem in arr:
+                try:
+                    if float(val_s) == float(str(elem)):
+                        return True, pos
+                except (ValueError, TypeError):
+                    if val_s == str(elem):
+                        return True, pos
+            return False, pos
+
+        if fl in ("isstring", "isint", "isfloat", "isbool"):
+            val, pos = self._cond_eval_atom(tokens, pos, variables, base_dir)
+            _consume_rp()
+            val_s = str(val).strip() if val is not None else ""
+            if fl == "isbool":
+                return val_s.lower() in ("true", "false"), pos
+            try:
+                f = float(val_s)
+                if fl == "isfloat":  return True,       pos
+                if fl == "isint":    return f == int(f), pos
+                return False, pos
+            except (ValueError, TypeError):
+                return fl == "isstring", pos
+
+        self._warn(f"$conditional: unknown function '{fname}()', treating as False")
+        return False, self._cond_skip_to_rparen(tokens, pos)
+
+    def _cond_eval_atom(self, tokens: list, pos: int, variables: dict, base_dir: Path):
+        """Parse and evaluate a single atom. Returns (value, new_pos).
+        Value may be str, int, float, or bool."""
+        if pos >= len(tokens):
+            return None, pos
+        tt, tv = tokens[pos]
+        if tt == _CTOK_NUM:
+            try:
+                f = float(tv)
+                return (int(f) if f == int(f) else f), pos + 1
+            except ValueError:
+                return tv, pos + 1
+        if tt == _CTOK_STR:
+            return tv, pos + 1
+        if tt == _CTOK_LPAREN:
+            result, pos = self._cond_eval_or(tokens, pos + 1, variables, base_dir)
+            if pos < len(tokens) and tokens[pos][0] == _CTOK_RPAREN:
+                pos += 1
+            return result, pos
+        if tt == _CTOK_IDENT:
+            if pos + 1 < len(tokens) and tokens[pos + 1][0] == _CTOK_LPAREN:
+                return self._cond_eval_func(tv, tokens, pos + 2, variables, base_dir)
+            if tv in variables:
+                raw = str(variables[tv])
+                try:
+                    f = float(raw)
+                    return (int(f) if f == int(f) else f), pos + 1
+                except (ValueError, TypeError):
+                    return raw, pos + 1
+            return tv, pos + 1
+        return None, pos + 1
+
+    def _cond_eval_cmp(self, tokens: list, pos: int, variables: dict, base_dir: Path) -> tuple[bool, int]:
+        left, pos = self._cond_eval_atom(tokens, pos, variables, base_dir)
+        if pos < len(tokens) and tokens[pos][0] == _CTOK_OP:
+            op = tokens[pos][1]; pos += 1
+            right, pos = self._cond_eval_atom(tokens, pos, variables, base_dir)
+            try:
+                l, r = float(str(left)), float(str(right))
+                return {"==": l == r, "!=": l != r, ">": l > r,
+                        "<": l < r, ">=": l >= r, "<=": l <= r}.get(op, False), pos
+            except (ValueError, TypeError):
+                ls, rs = str(left), str(right)
+                if op == "==": return ls == rs, pos
+                if op == "!=": return ls != rs, pos
+            return False, pos
+        if isinstance(left, bool):
+            return left, pos
+        s = str(left).strip() if left is not None else ""
+        return s not in ("", "0", "false"), pos
+
+    def _cond_eval_and(self, tokens: list, pos: int, variables: dict, base_dir: Path) -> tuple[bool, int]:
+        left, pos = self._cond_eval_cmp(tokens, pos, variables, base_dir)
+        while pos < len(tokens) and tokens[pos][0] == _CTOK_AND:
+            pos += 1
+            right, pos = self._cond_eval_cmp(tokens, pos, variables, base_dir)
+            left = left and right
+        return left, pos
+
+    def _cond_eval_or(self, tokens: list, pos: int, variables: dict, base_dir: Path) -> tuple[bool, int]:
+        left, pos = self._cond_eval_and(tokens, pos, variables, base_dir)
+        while pos < len(tokens) and tokens[pos][0] == _CTOK_OR:
+            pos += 1
+            right, pos = self._cond_eval_and(tokens, pos, variables, base_dir)
+            left = left or right
+        return left, pos
+
+    def _eval_conditional_expr(self, expr_str: str, variables: dict, base_dir: Path) -> bool:
+        """Evaluate a $conditional expression string and return bool."""
+        tokens = _tokenize_cond_expr(expr_str)
+        try:
+            result, _ = self._cond_eval_or(tokens, 0, variables, base_dir)
+        except Exception:
+            return False
+        return bool(result)
+
+    def _collect_raw_block_content(self, lines: list, i: int, depth: int) -> tuple[list[str], int]:
+        """Collect lines until brace depth reaches 0, excluding the closing-brace line's suffix."""
+        content: list[str] = []
+        while depth > 0 and i < len(lines):
+            rl = lines[i]; i += 1
+            depth += rl.count("{") - rl.count("}")
+            if depth > 0:
+                content.append(rl)
+            else:
+                before = rl[:rl.rfind("}")]
+                if before.strip():
+                    content.append(before + "\n")
+        return content, i
+
+    def _collect_raw_subblock(self, lines: list, i: int) -> tuple[list[str], int]:
+        """Find the next { in lines and collect content until the matching }."""
+        while i < len(lines) and "{" not in lines[i]:
+            i += 1
+        if i >= len(lines):
+            return [], i
+        brace_line = lines[i]; i += 1
+        bp    = brace_line.find("{")
+        after = brace_line[bp + 1:]
+        depth = 1 + after.count("{") - after.count("}")
+        content: list[str] = []
+        if after.strip():
+            if depth > 0:
+                content.append(after + "\n")
+            else:
+                before = after[:after.rfind("}")]
+                if before.strip():
+                    content.append(before + "\n")
+                return content, i
+        return self._collect_raw_block_content(lines, i, depth) if depth > 0 \
+               else (content, i)
+
+    def _parse_switch_body(self, switch_var: str, block_lines: list) -> list[tuple]:
+        """Convert switch/case/default into a flat if/elif/else branch list."""
+        branches: list[tuple] = []
+        i = 0
+        first = True
+        while i < len(block_lines):
+            raw = block_lines[i].strip(); i += 1
+            if not raw or raw.startswith("//"):
+                continue
+            parts = self._parse_command(raw)
+            if not parts:
+                continue
+            kw = parts[0].lower()
+            if kw in ("case", "default"):
+                if kw == "case" and len(parts) >= 2:
+                    case_val  = parts[1].strip('"')
+                    cond_expr = f'{switch_var} == "{case_val}"'
+                    kind      = "if" if first else "elif"
+                    first     = False
+                else:
+                    cond_expr = ""
+                    kind      = "else"
+
+                bp = raw.find("{")
+                if bp != -1:
+                    after_brace = raw[bp + 1:]
+                    depth       = 1 + after_brace.count("{") - after_brace.count("}")
+                    content: list[str] = ([after_brace + "\n"] if after_brace.strip() and depth > 0 else [])
+                    if depth > 0:
+                        more, i = self._collect_raw_block_content(block_lines, i, depth)
+                        content.extend(more)
+                    elif after_brace.strip():
+                        before = after_brace[:after_brace.rfind("}")]
+                        if before.strip():
+                            content.append(before + "\n")
+                else:
+                    content, i = self._collect_raw_subblock(block_lines, i)
+
+                branches.append((kind, cond_expr, content))
+        return branches
+
+    def _parse_conditional_structure(self, raw_lines: list) -> list[tuple]:
+        """
+        Parse if/elif/else or switch/case/default from raw_lines (the interior
+        of a $conditional { } block).  Returns [(kind, cond_expr, content_lines)].
+        """
+        branches: list[tuple] = []
+        i = 0
+        n = len(raw_lines)
+        while i < n:
+            line = raw_lines[i].strip(); i += 1
+            if not line or line.startswith("//"):
+                continue
+            parts = self._parse_command(line)
+            if not parts:
+                continue
+            kw = parts[0].lower()
+            if kw not in ("if", "elif", "else", "switch"):
+                continue
+
+            bp_in_line = line.find("{")
+            if bp_in_line != -1:
+                after_kw    = line[len(kw):bp_in_line].strip()
+                after_brace = line[bp_in_line + 1:]
+                depth       = 1 + after_brace.count("{") - after_brace.count("}")
+                content: list[str] = ([after_brace + "\n"] if after_brace.strip() and depth > 0 else [])
+                if depth > 0:
+                    more, i = self._collect_raw_block_content(raw_lines, i, depth)
+                    content.extend(more)
+                elif after_brace.strip():
+                    before = after_brace[:after_brace.rfind("}")]
+                    if before.strip():
+                        content.append(before + "\n")
+            else:
+                after_kw = line[len(kw):].strip()
+                content, i = self._collect_raw_subblock(raw_lines, i)
+
+            if kw == "switch":
+                branches.extend(self._parse_switch_body(after_kw.strip('"'), content))
+            elif kw == "else":
+                branches.append(("else", "", content))
+            else:
+                branches.append((kw, after_kw, content))
+
+        return branches
 
     # ------------------------------------------------------------------
     # $pushd / $popd
@@ -1386,6 +1761,53 @@ class QCProcessor:
                         new_bonemerge.add(helper_bone)
                 output_lines.append(f'// VRD Scale: {self.current_scale}\n')
                 output_lines.append(f'$proceduralbones "vrds/{vrd_name}.vrd"\n')
+                continue
+
+            # ----------------------------------------------------------
+            # $conditional - self-contained if/elif/else and switch/case
+            # ----------------------------------------------------------
+
+            if command == "$conditional":
+                if "{" in line:
+                    brace_line = line
+                    open_pos   = line.find("{")
+                elif i < len(all_lines) and "{" in all_lines[i]:
+                    brace_line = all_lines[i]; i += 1
+                    open_pos   = brace_line.find("{")
+                else:
+                    self._warn(f"Line {line_num}: $conditional missing opening brace")
+                    continue
+
+                after_open = brace_line[open_pos + 1:].strip()
+                depth      = brace_line.count("{") - brace_line.count("}")
+
+                if depth > 0:
+                    raw_block, i = self._collect_raw_block_content(all_lines, i, depth)
+                    if after_open:
+                        raw_block.insert(0, after_open + "\n")
+                else:
+                    before_end = after_open[:after_open.rfind("}")] if "}" in after_open else after_open
+                    raw_block  = [before_end + "\n"] if before_end.strip() else []
+
+                branches = self._parse_conditional_structure(raw_block)
+                matched  = None
+                for kind, cond_expr, content_lines in branches:
+                    if kind == "else":
+                        matched = content_lines
+                        break
+                    resolved_expr, sub_err = self._substitute_variables(cond_expr, line_num)
+                    if sub_err:
+                        continue
+                    if self._eval_conditional_expr(resolved_expr, self._effective_vars(), base_dir):
+                        matched = content_lines
+                        break
+
+                if matched:
+                    inner_lines  = "".join(matched).splitlines(True)
+                    inner_output = self.process_file(base_dir / "_", inner_lines, include_stack.copy())
+                    result       = "".join(inner_output)
+                    if result and result.strip():
+                        output_lines.append(result)
                 continue
 
             # ----------------------------------------------------------
