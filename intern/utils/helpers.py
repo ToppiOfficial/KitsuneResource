@@ -1,5 +1,5 @@
+import sys
 import time
-import re
 from functools import wraps
 
 from .logger import Logger
@@ -82,22 +82,15 @@ def print_wine_badge(wine_prefix: list) -> None:
 def print_summary(logger, elapsed):
     use_color = getattr(logger, 'use_color', True)
 
-    ORANGE = "\033[38;2;255;130;0m"
     GOLD   = "\033[38;2;255;200;80m"
     WHITE  = "\033[97m"
     RED    = "\033[91m"
     YELLOW = "\033[33m"
     RESET  = "\033[0m"
 
-    _ansi_escape = re.compile(r'\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])')
-
     def c(text, color):
         return f"{color}{text}{RESET}" if use_color else text
 
-    def plain_len(text):
-        return len(_ansi_escape.sub('', text))
-
-    # Collect all content lines to determine required box width
     content_lines = []
 
     if logger.model_total > 0 or logger.data_total > 0:
@@ -105,7 +98,7 @@ def print_summary(logger, elapsed):
         if logger.submodel_total > 0:
             content_lines.append(f"{c('Submodels:', WHITE)} {c(str(logger.submodel_compiled), GOLD)}/{c(str(logger.submodel_total), GOLD)}")
         content_lines.append(f"{c('Data:', WHITE)}       {c(str(logger.data_compiled), GOLD)}/{c(str(logger.data_total), GOLD)}")
-        content_lines.append(None)  # divider marker
+        content_lines.append(None)
 
     if logger.warn_count > 0 or logger.error_count > 0:
         err_str = c(str(logger.error_count), RED)
@@ -113,40 +106,17 @@ def print_summary(logger, elapsed):
         content_lines.append(f"{c('Build finished with ', WHITE)}{err_str}{c(' errors and ', WHITE)}{warn_str}{c(' warnings.', WHITE)}")
         for dedup_line in logger.get_dedup_summary():
             content_lines.append(c(dedup_line.strip(), YELLOW))
-        content_lines.append(None)  # divider marker
+        content_lines.append(None)
 
     content_lines.append(f"{c('Total time elapsed:', WHITE)} {c(f'{elapsed:.2f} seconds', GOLD)}")
 
-    # Width = max of all non-divider line lengths, minimum 54
-    W = max(54, max(plain_len(l) for l in content_lines if l is not None))
-
-    def color_border(ch):
-        return c(ch, ORANGE) if use_color else ch
-
-    def row(content=""):
-        padding = max(0, W - plain_len(content) - 2)
-        return f"{color_border('║')} {content}{' ' * padding} {color_border('║')}"
-
-    if use_color:
-        top = f"{color_border('╔')}{c('═' * W, ORANGE)}{color_border('╗')}"
-        div = f"{color_border('╠')}{c('═' * W, ORANGE)}{color_border('╣')}"
-        bot = f"{color_border('╚')}{c('═' * W, ORANGE)}{color_border('╝')}"
-    else:
-        top = f"+{'-' * W}+"
-        div = f"+{'-' * W}+"
-        bot = f"+{'-' * W}+"
-
-    output = [top]
+    print()
     for line in content_lines:
-        if line is None:
-            output.append(div)
-        else:
-            output.append(row(line))
-    output.append(bot)
+        print() if line is None else print(line)
+    print()
 
-    print()
-    print("\n".join(output))
-    print()
+    if hasattr(logger, 'write_session_footer'):
+        logger.write_session_footer(elapsed)
 
 
 _KITSUNE_RAW = [
@@ -190,3 +160,4 @@ def print_header():
     for line in extra_lines:
         print(f"{GOLD}{line.center(max_w)}{RESET}")
     print()
+    sys.stdout.flush()

@@ -120,11 +120,11 @@ def _log_compiler_output_to_console(output: str, log: Logger, verbose: bool, is_
         line_lower = line_stripped.lower()
 
         if "error" in line_lower or any(keyword in line_lower for keyword in ["failed", "cannot", "missing", "aborted"]):
-            log.error_console(line_stripped)
+            log.error(line_stripped)
         elif "warn" in line_lower:
-            log.warn_console(line_stripped)
+            log.warn(line_stripped)
         elif line_stripped.startswith("$"):
-            log.info_console(f"{ORANGE}{line_stripped}{RESET}")
+            log.info(f"{ORANGE}{line_stripped}{RESET}")
 
 
 def _move_compiled_files(mdl_path: Path | None, output_dir: Path | None, log: Logger) -> list[Path]:

@@ -5,6 +5,7 @@ from typing import Optional
 import argparse
 
 from intern.utils import Logger, timer, print_header, parse_config_json, resolve_config_path
+from intern.utils.constants import SOFTVERSION, SOFTBUILDDATE
 from intern.source.qc import process_qc_file
 from intern.pipeline import PIPELINE_REGISTRY
 
@@ -41,7 +42,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                         help="One or more paths to config.json files or .qc files.")
 
     parser.add_argument("--log", action="store_true",
-                        help="Enable logging to the './.resource-log' directory.")
+                        help=argparse.SUPPRESS)
     parser.add_argument("--verbose", action="store_true",
                         help="Enable verbose logging.")
 
@@ -82,17 +83,13 @@ def main():
 
     args = _build_arg_parser().parse_args(_normalize_args(sys.argv[1:]))
 
-    log_file = None
-    if args.log:
-        log_dir = Path(".resource-log").resolve()
-        log_dir.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        log_file = log_dir / f"{timestamp}.txt"
+    log_dir = Path(".resource-log").resolve()
+    log_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    log_file = log_dir / f"{timestamp}.log"
 
     logger = Logger(verbose=args.verbose, use_color=True, log_file=log_file)
-    if log_file:
-        logger.info(f"Logging enabled -> {log_file}")
-        logger.info("")
+    logger.write_session_header(SOFTVERSION, SOFTBUILDDATE)
 
     for config_path_str in args.config_paths:
         resolved_path = resolve_config_path(config_path_str, logger)

@@ -1011,7 +1011,7 @@ class QCProcessor:
     def _parse_vrd_helper_bones(self, vrd_path: Path) -> list[str]:
         """Return deduplicated helper bone names from a VRD file.
 
-        Extracts the first token from <helper> and <aimconstraint> lines — those
+        Extracts the first token from <helper> and <aimconstraint> lines. Those
         are the bones that need a corresponding $bonemerge in the QC.
         """
         seen  = set()
@@ -1411,8 +1411,8 @@ class QCProcessor:
 
         if not target.exists():
             if if_file_exist:
-                self._warn(f"Line {line_num}: Optional include not found, skipping: {include_file}")
-                self._add_diagnostic("warning", line_num, f"Optional include not found, skipping: {include_file}")
+                self._info(f"Line {line_num}: Optional include not found, skipping: {include_file}")
+                self._add_diagnostic("message", line_num, f"Optional include not found, skipping: {include_file}")
                 return None
             msg = f"Include file not found at line {line_num}: {include_file}"
             if self.logger: self.logger.error(msg)
@@ -2354,7 +2354,6 @@ class QCProcessor:
                             continue
                         except Exception as e:
                             self._warn(f"Line {line_num}: Failed to scale VRD '{vrd_raw}': {e}")
-                # VRD not found, scale not applicable, or scale error — fall through to passthrough
 
             # Track manually-written $bonemerge lines so the $proceduralbones
             # handler above can avoid emitting duplicates.

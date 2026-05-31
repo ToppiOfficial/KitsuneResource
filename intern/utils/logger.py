@@ -76,18 +76,13 @@ class Logger:
         elif level == "ERROR":
             self.root.error_count += 1
 
-        # Suppress repeated warn/error messages on console; still write them to the log file.
-        suppress_console = False
         if level in ("WARN", "ERROR"):
             key = (level, message)
-            prev = self.root._dedup_counts.get(key, 0)
-            self.root._dedup_counts[key] = prev + 1
-            if prev > 0:
-                suppress_console = True
+            self.root._dedup_counts[key] = self.root._dedup_counts.get(key, 0) + 1
 
         now = datetime.now()
 
-        if not suppress_console and (self.verbose or level != "DEBUG"):
+        if self.verbose or level != "DEBUG":
             timestamp_console = now.strftime("%H:%M:%S")
             level_prefix_str = f"[{level}]"
             prefix_part = f"{self.prefix} " if self.prefix else ""
@@ -111,9 +106,9 @@ class Logger:
 
         if self.log_file and not console_only:
             clean_message = self._ansi_escape.sub('', message)
-            timestamp_file = now.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
-            context_str = f"[{self.context_label}] " if self.context_label else ""
-            file_line = f"{timestamp_file}\t[{level.upper()}] {context_str}{clean_message}"
+            timestamp_file = now.strftime("%H:%M:%S.%f")[:-3]
+            ctx = (self.context_label or "").ljust(8)
+            file_line = f"{timestamp_file}  {level:<5}  {ctx} {clean_message}"
             self._write_to_file(file_line)
 
     def get_dedup_summary(self) -> list:
@@ -121,7 +116,7 @@ class Logger:
         for (level, message), count in self.root._dedup_counts.items():
             if count > 1:
                 clean_msg = self._ansi_escape.sub('', message)
-                lines.append(f"  [{level}] \"{clean_msg}\" - seen {count}x (first shown above)")
+                lines.append(f"  [{level}] \"{clean_msg}\" - seen {count}x")
         return lines
 
     def info(self, message): self._print("INFO", message)
@@ -132,12 +127,27 @@ class Logger:
     def write_raw_to_log(self, data, source="Generic"):
         if self.log_file:
             clean_data = self._ansi_escape.sub('', data)
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
             src = f"{self.context_label}/{source}" if self.context_label else source
-            header = f"--- BEGIN {src} OUTPUT"
-            footer = f"--- END {src} OUTPUT"
-            full_log = f"{timestamp}\t{header}\n{clean_data}\n{timestamp}\t{footer}"
+            full_log = f"--- BEGIN {src} OUTPUT ---\n{clean_data}\n--- END {src} OUTPUT ---"
             self._write_to_file(full_log)
+
+    def write_session_header(self, version, build_date):
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self._write_to_file(f"=== KitsuneResource {version} | {build_date} | {now} ===")
+        self._write_to_file(f"Log: {self.log_file}")
+        self._write_to_file("")
+
+    def write_session_footer(self, elapsed):
+        self._write_to_file("")
+        self._write_to_file("=== SUMMARY ===")
+        self._write_to_file(f"Models:  {self.root.model_compiled}/{self.root.model_total}")
+        if self.root.submodel_total > 0:
+            self._write_to_file(f"Submodels: {self.root.submodel_compiled}/{self.root.submodel_total}")
+        self._write_to_file(f"Data:    {self.root.data_compiled}/{self.root.data_total}")
+        self._write_to_file(f"Errors:  {self.root.error_count}  Warnings: {self.root.warn_count}")
+        for line in self.get_dedup_summary():
+            self._write_to_file(line)
+        self._write_to_file(f"Elapsed: {elapsed:.2f}s")
 
     def info_console(self, message): self._print("INFO", message, console_only=True)
     def warn_console(self, message): self._print("WARN", message, console_only=True)
