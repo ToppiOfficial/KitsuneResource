@@ -97,10 +97,21 @@ def generate_lookat_vrd(target_bone: str, attachment_name: str, frame_index: int
 def generate_vrd(driver_bone: str, pose_path: str, triggers: list[tuple[float, int]],
                  target_bones: list[str], pose_dir: Path, vrd_dir: Path, vrd_name: str,
                  scale: float = 1.0, logger=None,
-                 restpose_path: str | None = None, restpose_frame: int = 0) -> Path:
+                 restpose_path: str | None = None, restpose_frame: int = 0,
+                 autotrigger: tuple[int, int] | None = None) -> Path:
 
     pose_file    = _resolve_pose_file(pose_dir, pose_path)
     euler_frames = _load_euler_frames(pose_file, scale)
+
+    if autotrigger is not None:
+        total = len(euler_frames)
+        fmin, fmax = autotrigger
+        start = 0         if fmin == -1 else max(0, fmin)
+        end   = total - 1 if fmax == -1 else min(total - 1, fmax)
+        manual = {frame: angle for angle, frame in triggers}
+        triggers = [(manual.get(f, 90.0), f) for f in range(start, end + 1)]
+        if logger:
+            logger.info(f"(autotrigger): {len(triggers)} triggers generated for frames {start}–{end}")
 
     # ------------------------------------------------------------------
     # Retargeting: map pose deltas onto a different rest skeleton.

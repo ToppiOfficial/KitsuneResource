@@ -5,8 +5,14 @@ from typing import Optional
 from intern.utils import Logger, SOFTVERSION, SOFTBUILDDATE
 from intern.source import vrd as vrd_module
 from intern.source import flex_controllers
+from intern.source.static_mesh import bake_static_mesh
 from intern.formats import datamodel
-from intern.formats.bone_animations import read_dmx_bone_animation, frames_quat_to_euler, frames_rotation_to_degrees, read_smd_bone_animation, apply_world_scale
+from intern.formats.bone_animations import (
+    read_dmx_bone_animation, read_smd_bone_animation,
+    frames_quat_to_euler, frames_euler_to_quat, frames_rotation_to_degrees, apply_world_scale,
+    _quat_to_euler, _euler_to_quat, _quat_multiply, _quat_inverse,
+    BoneTransform,
+)
 
 ORANGE = "\033[38;5;208m"
 RED    = "\033[91m"
@@ -151,6 +157,81 @@ def _tokenize_cond_expr(expr: str) -> list[tuple[str, str]]:
 
 
 # ---------------------------------------------------------------------------
+# $deltaproportions math helpers
+# ---------------------------------------------------------------------------
+
+def _dp_rotate_by_quat(q: tuple, v: tuple) -> tuple:
+    """Rotate vector v by unit quaternion q (xyzw) via Rodrigues formula."""
+    qx, qy, qz, qw = q
+    vx, vy, vz = v
+    tx = 2.0 * (qy * vz - qz * vy)
+    ty = 2.0 * (qz * vx - qx * vz)
+    tz = 2.0 * (qx * vy - qy * vx)
+    return (
+        vx + qw * tx + (qy * tz - qz * ty),
+        vy + qw * ty + (qz * tx - qx * tz),
+        vz + qw * tz + (qx * ty - qy * tx),
+    )
+
+
+def _dp_compute_abs_transforms(frame) -> dict:
+    """Return dict[bone_name → (abs_pos, abs_rot_quat)] from a local-space BoneTransform list."""
+    bone_map = {bt.bone_name: bt for bt in frame}
+    cache: dict = {}
+
+    def _get(name: str):
+        if name in cache:
+            return cache[name]
+        bt = bone_map[name]
+        if bt.parent_name is None or bt.parent_name not in bone_map:
+            result = (bt.location, bt.rotation)
+        else:
+            p_pos, p_rot = _get(bt.parent_name)
+            abs_pos = tuple(p_pos[i] + _dp_rotate_by_quat(p_rot, bt.location)[i] for i in range(3))
+            abs_rot = _quat_multiply(p_rot, bt.rotation)
+            result = (abs_pos, abs_rot)
+        cache[name] = result
+        return result
+
+    for bt in frame:
+        _get(bt.bone_name)
+    return cache
+
+
+def _dp_abs_to_local(abs_pos: tuple, abs_rot: tuple,
+                     parent_abs_pos: tuple | None, parent_abs_rot: tuple | None) -> tuple:
+    """Convert absolute (world-space) pos+rot to local given parent world transform."""
+    if parent_abs_pos is None or parent_abs_rot is None:
+        return abs_pos, abs_rot
+    p_inv = _quat_inverse(parent_abs_rot)
+    local_rot = _quat_multiply(p_inv, abs_rot)
+    diff = (abs_pos[0] - parent_abs_pos[0], abs_pos[1] - parent_abs_pos[1], abs_pos[2] - parent_abs_pos[2])
+    local_pos = _dp_rotate_by_quat(p_inv, diff)
+    return local_pos, local_rot
+
+
+def _peek_dmx_format(path: Path) -> tuple[str, int, str, int] | None:
+    """Read the DMX header to extract (encoding, encoding_ver, format_name, format_ver)."""
+    try:
+        with open(str(path), 'rb') as f:
+            buf = b''
+            for _ in range(300):
+                ch = f.read(1)
+                if not ch:
+                    break
+                buf += ch
+                if ch == b'>':
+                    break
+        m = re.search(rb'encoding (\S+) (\d+) format (\S+) (\d+)', buf)
+        if m:
+            return (m.group(1).decode('ascii'), int(m.group(2)),
+                    m.group(3).decode('ascii'), int(m.group(4)))
+    except Exception:
+        pass
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Exceptions
 # ---------------------------------------------------------------------------
 
@@ -190,6 +271,7 @@ class QCProcessor:
         self.output_lines        = []
         self.json_vars           = set(self.variables)
         self.defined_vars        = set(self.variables)
+        self.block_vars          = set()   # names defined via $defineblock
         self.pushd_stack         = []
         self.current_scale       = current_scale
         self.compiler            = compiler
@@ -689,6 +771,10 @@ class QCProcessor:
                 self._warn(f"Line {line_num}: Cannot define variable '{name}' - shadowed by macro argument")
                 self._add_diagnostic("warning", line_num, f"Variable '{name}' shadowed by macro argument, ignoring")
                 return None
+            if name in self.block_vars:
+                raise QCCompileError(
+                    f"Line {line_num}: $definevariable '{name}' conflicts with an existing $defineblock of the same name"
+                )
             if name in self.json_vars:
                 return f"// Overridden by JSON config: {line}\n"
             if name in self.defined_vars:
@@ -1260,7 +1346,7 @@ class QCProcessor:
     # ------------------------------------------------------------------
 
     def _parse_driverbone_block(self, all_lines: list, start: int) -> tuple[dict | None, int]:
-        result = {"pose": None, "restpose": None, "triggers": [], "target_bones": []}
+        result = {"pose": None, "restpose": None, "triggers": [], "target_bones": [], "autotrigger": None}
         i = start - 1
 
         while i < len(all_lines) and "{" not in all_lines[i]:
@@ -1306,6 +1392,12 @@ class QCProcessor:
                 fp = tokens[1] if len(tokens) > 1 else None
                 fi = int(tokens[2]) if len(tokens) > 2 else 0
                 result["restpose"] = (fp, fi)
+                continue
+
+            if tokens[0].lower() == "autotrigger":
+                fmin = int(tokens[1]) if len(tokens) > 1 else -1
+                fmax = int(tokens[2]) if len(tokens) > 2 else -1
+                result["autotrigger"] = (fmin, fmax)
                 continue
 
             j = 0
@@ -1380,6 +1472,715 @@ class QCProcessor:
                     result["helper_bones"].append(tok.strip('"'))
 
         return result, i
+
+    # ------------------------------------------------------------------
+    # $staticbody block parser
+    # ------------------------------------------------------------------
+
+    def _parse_staticbody_block(self, all_lines: list, start: int) -> tuple[dict | None, int]:
+        result = {
+            "pose_raw":  None,
+            "frame_idx": 0,
+            "origin":    (0., 0., 0., 0., 0., 0.),
+            "del_names": [],
+            "keep_names": None,
+        }
+        i = start - 1
+
+        while i < len(all_lines) and "{" not in all_lines[i]:
+            i += 1
+        if i >= len(all_lines):
+            return None, i
+        i += 1
+
+        saved_if_stack = self.if_stack
+        self.if_stack  = []
+
+        while i < len(all_lines):
+            raw = all_lines[i].strip()
+            i += 1
+
+            if raw == "}":
+                break
+            if not raw or raw.startswith("//"):
+                continue
+
+            raw_parts = self._parse_command(raw)
+            raw_cmd   = raw_parts[0].lower() if raw_parts else ""
+
+            is_skipping = bool(self.if_stack) and not self.if_stack[-1][0]
+            if self._handle_conditional(raw_cmd, raw_parts, i, is_skipping):
+                continue
+            if is_skipping:
+                continue
+
+            line, _ = self._substitute_variables(raw, i)
+            tokens  = self._parse_command(line)
+            if not tokens:
+                continue
+
+            kw = tokens[0].lower()
+
+            if kw == "pose" and len(tokens) >= 3:
+                result["pose_raw"] = tokens[1].strip('"')
+                try:
+                    result["frame_idx"] = int(tokens[2])
+                except ValueError:
+                    pass
+            elif kw == "pose" and len(tokens) == 2:
+                result["pose_raw"] = tokens[1].strip('"')
+            elif kw == "origin" and len(tokens) >= 7:
+                try:
+                    result["origin"] = tuple(float(tokens[k]) for k in range(1, 7))
+                except ValueError:
+                    pass
+            elif kw in _EXCLUDE_MESH_KEYWORDS | _ISOLATE_MESH_KEYWORDS:
+                # Accumulate text until the matching } is found
+                rest = " ".join(tokens[1:])
+                while "{" not in rest and i < len(all_lines):
+                    rest += " " + all_lines[i].strip()
+                    i += 1
+                if "{" not in rest:
+                    continue
+                bp    = rest.find("{")
+                inner = rest[bp + 1:]
+                depth = 1 + inner.count("{") - inner.count("}")
+                while depth > 0 and i < len(all_lines):
+                    nxt    = all_lines[i].strip()
+                    i     += 1
+                    depth += nxt.count("{") - nxt.count("}")
+                    inner += " " + (nxt if depth > 0 else nxt[:nxt.rfind("}")])
+                mesh_names = self._parse_del_tokens(inner)
+                if kw in _EXCLUDE_MESH_KEYWORDS:
+                    result["del_names"].extend(mesh_names)
+                else:
+                    result["keep_names"] = (result["keep_names"] or []) + mesh_names
+
+        self.if_stack = saved_if_stack
+        return result, i
+
+    # ------------------------------------------------------------------
+    # $deltaproportions block parser
+    # ------------------------------------------------------------------
+
+    def _parse_deltaproportions_block(self, all_lines: list, start: int) -> tuple:
+        result = {
+            "referencepose":  None,
+            "proportionpose": None,
+            "output_format":  None,
+            "dmx_model_ver":  None,   # int → force format "model <ver>"
+            "dmx_enc_ver":    None,   # int → -1=keyvalues2 1, else binary <ver>
+            "qc_reference":   [],     # extra QC lines appended inside $animation block
+            "qc_proportions": [],
+            "bones": {},
+            "_return":        False,  # set True when $return is encountered
+        }
+        i = start - 1
+        while i < len(all_lines) and "{" not in all_lines[i]:
+            i += 1
+        if i >= len(all_lines):
+            return None, i
+        i += 1
+
+        saved_if_stack = self.if_stack
+        self.if_stack  = []
+
+        try:
+            while i < len(all_lines):
+                raw = all_lines[i].strip()
+                i += 1
+                if raw == "}":
+                    break
+                if not raw or raw.startswith("//"):
+                    continue
+
+                raw_parts = self._parse_command(raw)
+                raw_cmd   = raw_parts[0].lower() if raw_parts else ""
+
+                is_skipping = bool(self.if_stack) and not self.if_stack[-1][0]
+                if self._handle_conditional(raw_cmd, raw_parts, i, is_skipping):
+                    continue
+                if is_skipping:
+                    continue
+
+                line, _ = self._substitute_variables(raw, i)
+                # A variable may expand to multiple lines; iterate each sub-line
+                # independently so multi-line $defineblock expansions work correctly.
+                _early_return = False
+                for sub_line in line.split('\n'):
+                    sub_line = sub_line.strip()
+                    if not sub_line or sub_line.startswith('//'):
+                        continue
+                    tokens = self._parse_command(sub_line)
+                    if not tokens:
+                        continue
+                    kw = tokens[0].lower()
+
+                    if kw == "$return":
+                        result["_return"] = True
+                        _early_return = True
+                        break
+
+                    elif kw in ("referencepose", "proportionpose"):
+                        if len(tokens) < 3:
+                            raise QCCompileError(
+                                f"$deltaproportions: '{kw}' requires a file path and frame index"
+                            )
+                        try:
+                            frame = int(tokens[2])
+                        except ValueError:
+                            raise QCCompileError(
+                                f"$deltaproportions: '{kw}' frame index must be an integer, got '{tokens[2]}'"
+                            )
+                        result[kw] = (tokens[1].strip('"'), frame)
+
+                    elif kw == "to_dmx":
+                        if result["output_format"] is None:
+                            result["output_format"] = "dmx"
+
+                    elif kw == "to_smd":
+                        if result["output_format"] is None:
+                            result["output_format"] = "smd"
+
+                    elif kw == "dmxmodel":
+                        if len(tokens) < 2:
+                            raise QCCompileError("$deltaproportions: 'dmxmodel' requires a version integer")
+                        try:
+                            ver = int(tokens[1])
+                        except ValueError:
+                            raise QCCompileError(
+                                f"$deltaproportions: 'dmxmodel' version must be an integer, got '{tokens[1]}'"
+                            )
+                        if ver < 1:
+                            raise QCCompileError(
+                                f"$deltaproportions: 'dmxmodel' version must be a positive integer, got {ver}"
+                            )
+                        result["dmx_model_ver"] = ver
+
+                    elif kw == "dmxbinary":
+                        if len(tokens) < 2:
+                            raise QCCompileError(
+                                "$deltaproportions: 'dmxbinary' requires a version integer (-1 for ASCII keyvalues2)"
+                            )
+                        try:
+                            ver = int(tokens[1])
+                        except ValueError:
+                            raise QCCompileError(
+                                f"$deltaproportions: 'dmxbinary' version must be an integer, got '{tokens[1]}'"
+                            )
+                        _valid_binary = [1, 2, 3, 4, 5, 9]
+                        if ver != -1 and ver not in _valid_binary:
+                            raise QCCompileError(
+                                f"$deltaproportions: 'dmxbinary' version {ver} is not supported "
+                                f"(valid: {_valid_binary}, or -1 for ASCII keyvalues2)"
+                            )
+                        result["dmx_enc_ver"] = ver
+
+                    elif kw == "bone":
+                        if len(tokens) < 2:
+                            raise QCCompileError("$deltaproportions: 'bone' requires a bone name")
+                        bone_name = tokens[1].strip('"')
+                        bparams: dict = {
+                            "ignore": False, "offsetpos": None,
+                            "offsetangle": None, "ignorepos": None, "ignoreangle": None,
+                        }
+                        j = 2
+                        while j < len(tokens):
+                            pk = tokens[j].lower()
+                            if pk == "ignore":
+                                bparams["ignore"] = True
+                                j += 1
+                            elif pk in ("offsetpos", "offsetangle", "ignorepos", "ignoreangle"):
+                                if j + 3 >= len(tokens):
+                                    raise QCCompileError(
+                                        f"$deltaproportions: bone '{bone_name}' param '{pk}' requires 3 values"
+                                    )
+                                try:
+                                    bparams[pk] = (float(tokens[j+1]), float(tokens[j+2]), float(tokens[j+3]))
+                                except ValueError:
+                                    raise QCCompileError(
+                                        f"$deltaproportions: bone '{bone_name}' param '{pk}' has non-numeric values"
+                                    )
+                                j += 4
+                            else:
+                                raise QCCompileError(
+                                    f"$deltaproportions: unknown bone param '{tokens[j]}' for bone '{bone_name}'"
+                                )
+                        result["bones"][bone_name.lower()] = bparams
+
+                    elif kw in ("qc_reference", "qc_proportions"):
+                        # find opening { (may be on the same line or the next)
+                        if "{" not in sub_line:
+                            while i < len(all_lines) and "{" not in all_lines[i]:
+                                i += 1
+                            if i >= len(all_lines):
+                                raise QCCompileError(
+                                    f"$deltaproportions: '{kw}' block is missing opening {{"
+                                )
+                            i += 1  # skip the line that contains {
+                        # collect lines; evaluate conditionals and variable substitution
+                        extra: list[str] = []
+                        saved_sub_stack = self.if_stack
+                        self.if_stack = []
+                        try:
+                            while i < len(all_lines):
+                                qc_raw = all_lines[i].strip()
+                                i += 1
+                                if qc_raw == "}":
+                                    break
+                                if not qc_raw or qc_raw.startswith("//"):
+                                    continue
+                                qc_parts = self._parse_command(qc_raw)
+                                qc_cmd   = qc_parts[0].lower() if qc_parts else ""
+                                qc_skip  = bool(self.if_stack) and not self.if_stack[-1][0]
+                                if self._handle_conditional(qc_cmd, qc_parts, i, qc_skip):
+                                    continue
+                                if qc_skip:
+                                    continue
+                                qc_expanded, _ = self._substitute_variables(qc_raw, i)
+                                extra.append(qc_expanded)
+                        finally:
+                            self.if_stack = saved_sub_stack
+                        result[kw] = extra
+
+                    else:
+                        raise QCCompileError(f"$deltaproportions: unknown keyword '{tokens[0]}'")
+
+                if _early_return:
+                    break
+
+        finally:
+            self.if_stack = saved_if_stack
+
+        if result["output_format"] is None:
+            result["output_format"] = "dmx"
+        return result, i
+
+    # ------------------------------------------------------------------
+    # Skeleton file writers
+    # ------------------------------------------------------------------
+
+    def _write_skeleton_dmx(self, output_path: Path, bones_data: list,
+                            dmx_format: str, dmx_format_ver: int,
+                            encoding: str = "keyvalues2", encoding_ver: int = 1) -> None:
+        """Write a rest-pose skeleton DMX (ASCII keyvalues2) matching Blender/Source format.
+
+        Uses DmeJoint elements. Each DmeTransform is shared between the joint hierarchy
+        and baseStates, so it serialises as a separate top-level element (matching what
+        Blender's DMX exporter produces). Blender and studiomdl both read baseStates as
+        the authoritative rest-pose transforms.
+        """
+        dm   = datamodel.DataModel(dmx_format, dmx_format_ver)
+        root = dm.add_element("root", elemtype="DmElement")
+
+        # ---- skeleton hierarchy (baseStates is authoritative for studiomdl) ----------
+        model = dm.add_element("skeleton", elemtype="DmeModel")
+        root["skeleton"] = model
+        model["children"]  = datamodel.make_array([], datamodel.Element)
+        model["jointList"] = datamodel.make_array([], datamodel.Element)
+
+        trfm_list = dm.add_element("base", elemtype="DmeTransformList")
+        trfm_list["transforms"] = datamodel.make_array([], datamodel.Element)
+        model["baseStates"] = datamodel.make_array([trfm_list], datamodel.Element)
+
+        joint_map: dict[str, datamodel.Element] = {}
+        trfm_map:  dict[str, datamodel.Element] = {}
+        for bone_name, _parent, loc, rot in bones_data:
+            trfm = dm.add_element(bone_name, elemtype="DmeTransform")
+            trfm["position"]    = datamodel.Vector3(list(loc))
+            trfm["orientation"] = datamodel.Quaternion(list(rot))
+            trfm_map[bone_name] = trfm
+
+            joint = dm.add_element(bone_name, elemtype="DmeJoint")
+            joint["transform"] = trfm
+            joint["children"]  = datamodel.make_array([], datamodel.Element)
+            joint_map[bone_name] = joint
+
+            trfm_list["transforms"].append(trfm)   # _users=2 → separate top-level element
+            model["jointList"].append(joint)        # _users=2 → separate top-level element
+
+        for bone_name, parent_name, _loc, _rot in bones_data:
+            joint = joint_map[bone_name]
+            if parent_name and parent_name in joint_map:
+                joint_map[parent_name]["children"].append(joint)
+            else:
+                model["children"].append(joint)
+
+        # ---- single-frame animationList (required by Blender's animation importer) ---
+        # Blender's Source Tools look for animationList to import pose data.
+        # toElement references the same DmeTransform used in the skeleton so the
+        # reader can resolve bone names via transform_id_map.
+        anim_list = dm.add_element("", elemtype="DmeAnimationList")
+        root["animationList"] = anim_list
+
+        anim_name = output_path.stem
+        clip = dm.add_element(anim_name, elemtype="DmeChannelsClip")
+        anim_list["animations"] = datamodel.make_array([clip], datamodel.Element)
+
+        time_frame = dm.add_element("timeframe", elemtype="DmeTimeFrame")
+        time_frame["duration"] = datamodel.Time(0.0)
+        time_frame["scale"]    = 1.0
+        clip["timeFrame"]  = time_frame
+        clip["frameRate"]  = 30
+        clip["channels"]   = datamodel.make_array([], datamodel.Element)
+
+        for bone_name, _, loc, rot in bones_data:
+            trfm = trfm_map[bone_name]
+
+            pos_layer = dm.add_element("Vector3 log", elemtype="DmeVector3LogLayer")
+            pos_layer["times"]  = datamodel.make_array([datamodel.Time(0.0)], datamodel.Time)
+            pos_layer["values"] = datamodel.make_array([datamodel.Vector3(list(loc))], datamodel.Vector3)
+            pos_log = dm.add_element("Vector3 log", elemtype="DmeVector3Log")
+            pos_log["layers"] = datamodel.make_array([pos_layer], datamodel.Element)
+            pos_chan = dm.add_element(bone_name + "_p", elemtype="DmeChannel")
+            pos_chan["toElement"]   = trfm
+            pos_chan["toAttribute"] = "position"
+            pos_chan["mode"]        = 1
+            pos_chan["log"]         = pos_log
+            clip["channels"].append(pos_chan)
+
+            ori_layer = dm.add_element("Quaternion log", elemtype="DmeQuaternionLogLayer")
+            ori_layer["times"]  = datamodel.make_array([datamodel.Time(0.0)], datamodel.Time)
+            ori_layer["values"] = datamodel.make_array([datamodel.Quaternion(list(rot))], datamodel.Quaternion)
+            ori_log = dm.add_element("Quaternion log", elemtype="DmeQuaternionLog")
+            ori_log["layers"] = datamodel.make_array([ori_layer], datamodel.Element)
+            ori_chan = dm.add_element(bone_name + "_o", elemtype="DmeChannel")
+            ori_chan["toElement"]   = trfm
+            ori_chan["toAttribute"] = "orientation"
+            ori_chan["mode"]        = 1
+            ori_chan["log"]         = ori_log
+            clip["channels"].append(ori_chan)
+
+        dm.write(str(output_path), encoding, encoding_ver)
+
+    def _write_skeleton_smd(self, output_path: Path, bones_data: list) -> None:
+        """Write a rest-pose skeleton SMD from bones_data list of (name, parent_name, local_pos, local_rot_euler_rad)."""
+        bone_index = {name: idx for idx, (name, *_) in enumerate(bones_data)}
+        lines = ["version 1\nnodes\n"]
+        for idx, (name, parent_name, _loc, _rot) in enumerate(bones_data):
+            pid = bone_index.get(parent_name, -1) if parent_name else -1
+            lines.append(f'{idx} "{name}" {pid}\n')
+        lines.append("end\nskeleton\ntime 0\n")
+        for idx, (_name, _parent, loc, rot) in enumerate(bones_data):
+            x, y, z    = loc
+            rx, ry, rz = rot
+            lines.append(f'{idx} {x:.6f} {y:.6f} {z:.6f} {rx:.6f} {ry:.6f} {rz:.6f}\n')
+        lines.append("end\n")
+        output_path.write_text("".join(lines), encoding="utf-8")
+
+    # ------------------------------------------------------------------
+    # $deltaproportions generator
+    # ------------------------------------------------------------------
+
+    def _generate_deltaproportions(self, line_num: int, output_name: str, block: dict, base_dir: Path) -> list:
+        from math import radians
+
+        ref_path_str, ref_frame  = block["referencepose"]
+        prop_path_str, prop_frame = block["proportionpose"]
+        ext      = block["output_format"]
+        bone_cfg = block["bones"]
+
+        # ---- resolve and read reference pose ----------------------------------------
+        ref_dmx = self._resolve_mesh_path(ref_path_str, base_dir)
+        if not ref_dmx:
+            raise QCCompileError(
+                f"Line {line_num}: $deltaproportions: referencepose cannot resolve '{ref_path_str}'"
+            )
+        try:
+            if ref_dmx.suffix.lower() == ".dmx":
+                ref_frames = read_dmx_bone_animation(str(ref_dmx))
+            else:
+                ref_frames = frames_euler_to_quat(read_smd_bone_animation(str(ref_dmx)))
+        except Exception as e:
+            raise QCCompileError(f"Line {line_num}: $deltaproportions: failed to read referencepose: {e}")
+
+        if not ref_frames or ref_frame >= len(ref_frames):
+            raise QCCompileError(
+                f"Line {line_num}: $deltaproportions: referencepose frame {ref_frame} out of range "
+                f"(file has {len(ref_frames)} frame(s))"
+            )
+        ref_bts = ref_frames[ref_frame]
+
+        # ---- resolve and read proportion pose ----------------------------------------
+        prop_dmx = self._resolve_mesh_path(prop_path_str, base_dir)
+        if not prop_dmx:
+            raise QCCompileError(
+                f"Line {line_num}: $deltaproportions: proportionpose cannot resolve '{prop_path_str}'"
+            )
+        try:
+            if prop_dmx.suffix.lower() == ".dmx":
+                prop_frames = read_dmx_bone_animation(str(prop_dmx))
+            else:
+                prop_frames = frames_euler_to_quat(read_smd_bone_animation(str(prop_dmx)))
+        except Exception as e:
+            raise QCCompileError(f"Line {line_num}: $deltaproportions: failed to read proportionpose: {e}")
+
+        if not prop_frames or prop_frame >= len(prop_frames):
+            raise QCCompileError(
+                f"Line {line_num}: $deltaproportions: proportionpose frame {prop_frame} out of range "
+                f"(file has {len(prop_frames)} frame(s))"
+            )
+        prop_bts = prop_frames[prop_frame]
+
+        # ---- resolve output format ---------------------------------------------------
+        # dmxmodel/dmxbinary force DMX output regardless of input types.
+        # Without them, fall back to SMD when both inputs are SMD.
+        dmx_forced = block["dmx_model_ver"] is not None or block["dmx_enc_ver"] is not None
+        if not dmx_forced and ref_dmx.suffix.lower() == ".smd" and prop_dmx.suffix.lower() == ".smd":
+            ext = "smd"
+        elif dmx_forced:
+            ext = "dmx"
+
+        # ---- build case-insensitive proportion bone lookup ----------------------------
+        prop_map = {bt.bone_name.lower(): bt for bt in prop_bts}
+
+        # ---- compute absolute transforms for the proportion pose ----------------------
+        prop_abs = _dp_compute_abs_transforms(prop_bts)
+
+        # ---- build hierarchical processing order from reference pose ------------------
+        ref_bone_map = {bt.bone_name: bt for bt in ref_bts}
+        child_map: dict[str | None, list] = {}
+        for bt in ref_bts:
+            parent_key = bt.parent_name if (bt.parent_name and bt.parent_name in ref_bone_map) else None
+            child_map.setdefault(parent_key, []).append(bt.bone_name)
+
+        ordered: list[str] = []
+        stack = list(child_map.get(None, []))
+        while stack:
+            name = stack.pop(0)
+            ordered.append(name)
+            stack[:0] = child_map.get(name, [])
+
+        # ---- strip unmatched bones ---------------------------------------------------
+        # Bones with no proportion-pose match and no explicit `bone` config entry are
+        # removed from the output skeleton.  Their children are reparented to the
+        # nearest surviving ancestor and get updated local transforms so that their
+        # world-space pose is unchanged.
+        removed_bones: set[str] = {
+            name for name in ordered
+            if name.lower() not in prop_map and name.lower() not in bone_cfg
+        }
+        if removed_bones:
+            if self.logger:
+                self.logger.info(
+                    f"$deltaproportions: stripping {len(removed_bones)} unmatched bone(s): "
+                    + ", ".join(sorted(removed_bones))
+                )
+
+            ref_orig_abs = _dp_compute_abs_transforms(ref_bts)
+
+            def _effective_parent(bone_name: str) -> str | None:
+                """Walk up the original parent chain, skipping removed bones."""
+                p = ref_bone_map[bone_name].parent_name
+                while p:
+                    if p in ref_bone_map and p not in removed_bones:
+                        return p
+                    p = ref_bone_map[p].parent_name if p in ref_bone_map else None
+                return None
+
+            new_ref_bts = []
+            for name in ordered:
+                if name in removed_bones:
+                    continue
+                eff_par = _effective_parent(name)
+                bone_abs_pos, bone_abs_rot = ref_orig_abs[name]
+                if eff_par is not None:
+                    par_abs_pos, par_abs_rot = ref_orig_abs[eff_par]
+                else:
+                    par_abs_pos = par_abs_rot = None
+                new_loc, new_rot = _dp_abs_to_local(bone_abs_pos, bone_abs_rot, par_abs_pos, par_abs_rot)
+                new_ref_bts.append(BoneTransform(name, eff_par, new_loc, new_rot))
+
+            ref_bts = new_ref_bts
+            ref_bone_map = {bt.bone_name: bt for bt in ref_bts}
+            child_map = {}
+            for bt in ref_bts:
+                par_key = bt.parent_name if (bt.parent_name and bt.parent_name in ref_bone_map) else None
+                child_map.setdefault(par_key, []).append(bt.bone_name)
+            ordered = []
+            stack = list(child_map.get(None, []))
+            while stack:
+                name = stack.pop(0)
+                ordered.append(name)
+                stack[:0] = child_map.get(name, [])
+
+        # ---- pass 1: copy rotations (root→child) → _reference skeleton ---------------
+        # Position of each bone is always derived from parent's NEW transform + local offset,
+        # so rotating a parent also repositions all its children in world space.
+        ref_new_abs: dict[str, tuple] = {}
+
+        for bone_name in ordered:
+            bt          = ref_bone_map[bone_name]
+            parent_name = bt.parent_name if (bt.parent_name and bt.parent_name in ref_bone_map) else None
+            orig_loc    = bt.location
+            orig_rot    = bt.rotation
+
+            if parent_name:
+                par_abs_pos, par_abs_rot = ref_new_abs[parent_name]
+            else:
+                par_abs_pos = par_abs_rot = None
+
+            if par_abs_pos is not None:
+                new_abs_pos = tuple(par_abs_pos[i] + _dp_rotate_by_quat(par_abs_rot, orig_loc)[i] for i in range(3))
+            else:
+                new_abs_pos = orig_loc
+
+            lc      = bone_name.lower()
+            prop_bt = prop_map.get(lc)
+            cfg     = bone_cfg.get(lc, {})
+            has_match = prop_bt is not None and not cfg.get("ignore")
+
+            if has_match:
+                p_abs_rot = prop_abs[prop_bt.bone_name][1]
+                ign_ang   = cfg.get("ignoreangle")
+                if ign_ang:
+                    cur_abs_rot = _quat_multiply(par_abs_rot, orig_rot) if par_abs_rot else orig_rot
+                    re_ = _quat_to_euler(*cur_abs_rot)
+                    pe_ = _quat_to_euler(*p_abs_rot)
+                    new_abs_rot = _euler_to_quat(*(re_[k] if ign_ang[k] else pe_[k] for k in range(3)))
+                else:
+                    new_abs_rot = p_abs_rot
+            else:
+                new_abs_rot = _quat_multiply(par_abs_rot, orig_rot) if par_abs_rot else orig_rot
+
+            ref_new_abs[bone_name] = (new_abs_pos, new_abs_rot)
+
+        # ---- pass 2: copy positions on top of pass 1 → _proportions skeleton ---------
+        # Rotations are unchanged from pass 1. For matched bones the world position is
+        # taken from the proportion pose (with ignorepos masking). Unmatched children
+        # follow their parent's new position by maintaining their local offset.
+        prop_new_abs: dict[str, tuple] = {}
+
+        for bone_name in ordered:
+            bt          = ref_bone_map[bone_name]
+            parent_name = bt.parent_name if (bt.parent_name and bt.parent_name in ref_bone_map) else None
+            orig_loc    = bt.location
+
+            if parent_name:
+                par_abs_pos, par_abs_rot = prop_new_abs[parent_name]
+            else:
+                par_abs_pos = par_abs_rot = None
+
+            _, new_abs_rot = ref_new_abs[bone_name]
+
+            if par_abs_pos is not None:
+                derived_pos = tuple(par_abs_pos[i] + _dp_rotate_by_quat(par_abs_rot, orig_loc)[i] for i in range(3))
+            else:
+                derived_pos = orig_loc
+
+            lc      = bone_name.lower()
+            prop_bt = prop_map.get(lc)
+            cfg     = bone_cfg.get(lc, {})
+            has_match = prop_bt is not None and not cfg.get("ignore")
+
+            if has_match:
+                p_abs_pos = prop_abs[prop_bt.bone_name][0]
+                ign_pos   = cfg.get("ignorepos")
+                if ign_pos:
+                    new_abs_pos = tuple(derived_pos[k] if ign_pos[k] else p_abs_pos[k] for k in range(3))
+                else:
+                    new_abs_pos = p_abs_pos
+            else:
+                new_abs_pos = derived_pos
+
+            prop_new_abs[bone_name] = (new_abs_pos, new_abs_rot)
+
+        # ---- convert absolute transforms back to local + build output lists -----------
+        ref_local_data:  list = []
+        prop_local_data: list = []
+
+        for bone_name in ordered:
+            bt          = ref_bone_map[bone_name]
+            parent_name = bt.parent_name if (bt.parent_name and bt.parent_name in ref_bone_map) else None
+
+            par_r = ref_new_abs[parent_name]  if parent_name else (None, None)
+            par_p = prop_new_abs[parent_name] if parent_name else (None, None)
+
+            ref_loc,  ref_rot  = _dp_abs_to_local(*ref_new_abs[bone_name],  *par_r)
+            prop_loc, prop_rot = _dp_abs_to_local(*prop_new_abs[bone_name], *par_p)
+
+            cfg     = bone_cfg.get(bone_name.lower(), {})
+            off_pos = cfg.get("offsetpos")
+            off_ang = cfg.get("offsetangle")
+            if off_pos:
+                # offset is in bone-local space; rotate into parent space before adding
+                rotated = _dp_rotate_by_quat(prop_rot, off_pos)
+                prop_loc = (prop_loc[0] + rotated[0], prop_loc[1] + rotated[1], prop_loc[2] + rotated[2])
+            if off_ang:
+                # offset is in bone-local space; right-multiply so it applies after prop rotation
+                off_rot = _euler_to_quat(radians(off_ang[0]), radians(off_ang[1]), radians(off_ang[2]))
+                prop_rot = _quat_multiply(prop_rot, off_rot)
+
+            if ext == "smd":
+                ref_local_data.append( (bone_name, parent_name, ref_loc,  _quat_to_euler(*ref_rot)))
+                prop_local_data.append((bone_name, parent_name, prop_loc, _quat_to_euler(*prop_rot)))
+            else:
+                ref_local_data.append( (bone_name, parent_name, ref_loc,  ref_rot))
+                prop_local_data.append((bone_name, parent_name, prop_loc, prop_rot))
+
+        # ---- determine output paths --------------------------------------------------
+        output_base = self.pushd_stack[-1] if self.pushd_stack else (self.root_dir or base_dir)
+        out_p       = Path(output_name)
+        ref_path    = (output_base / out_p.parent / f"{out_p.stem}_reference.{ext}").resolve()
+        prop_path   = (output_base / out_p.parent / f"{out_p.stem}_proportions.{ext}").resolve()
+        ref_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # ---- write output files ------------------------------------------------------
+        try:
+            if ext == "dmx":
+                # Resolve format (name + version)
+                if block["dmx_model_ver"] is not None:
+                    dmx_fmt, dmx_fmt_ver = "model", block["dmx_model_ver"]
+                    dmx_info = None
+                else:
+                    dmx_info = None
+                    for src in (ref_dmx, prop_dmx):
+                        if src.suffix.lower() == ".dmx":
+                            dmx_info = _peek_dmx_format(src)
+                            break
+                    if dmx_info is None:
+                        raise QCCompileError(
+                            f"Line {line_num}: $deltaproportions: could not read DMX format/version "
+                            f"from input — use 'dmxmodel <ver>' to set it explicitly"
+                        )
+                    dmx_fmt, dmx_fmt_ver = dmx_info[2], dmx_info[3]
+
+                # Resolve encoding
+                if block["dmx_enc_ver"] is not None:
+                    ev = block["dmx_enc_ver"]
+                    dmx_enc, dmx_enc_ver = ("keyvalues2", 1) if ev == -1 else ("binary", ev)
+                elif dmx_info is not None:
+                    dmx_enc, dmx_enc_ver = dmx_info[0], dmx_info[1]
+                else:
+                    dmx_enc, dmx_enc_ver = "keyvalues2", 1
+
+                self._write_skeleton_dmx(ref_path,  ref_local_data,  dmx_fmt, dmx_fmt_ver, dmx_enc, dmx_enc_ver)
+                self._write_skeleton_dmx(prop_path, prop_local_data, dmx_fmt, dmx_fmt_ver, dmx_enc, dmx_enc_ver)
+            else:
+                self._write_skeleton_smd(ref_path,  ref_local_data)
+                self._write_skeleton_smd(prop_path, prop_local_data)
+        except Exception as e:
+            raise QCCompileError(f"Line {line_num}: $deltaproportions: failed to write output files: {e}")
+
+        if self.logger:
+            self.logger.info(f"$deltaproportions: wrote '{ref_path.name}' and '{prop_path.name}'")
+
+        # ---- emit $animation lines ---------------------------------------------------
+        anim_base = str(out_p).replace("\\", "/")
+
+        def _fmt_anim(anim_name: str, file_stem: str, extra: list) -> list:
+            if extra:
+                lines = [f'$animation "{anim_name}" "{file_stem}" {{\n',
+                         '  numframes 1\n']
+                lines += [f'  {ln}\n' for ln in extra]
+                lines.append('}\n')
+                return lines
+            return [f'$animation "{anim_name}" "{file_stem}" numframes 1']
+
+        return (
+            _fmt_anim("a_reference",   f"{anim_base}_reference",   block["qc_reference"])
+            + _fmt_anim("a_proportions", f"{anim_base}_proportions", block["qc_proportions"])
+        )
 
     # ------------------------------------------------------------------
     # Include / macro expansion
@@ -1609,6 +2410,52 @@ class QCProcessor:
                     self._add_diagnostic("warning", line_num, f"Malformed $definemacro: {stripped}")
                 continue
 
+            # $defineblock - store a multi-line literal block as a variable
+            if raw_cmd == "$defineblock":
+                if len(raw_parts) < 2:
+                    self._err(f"Line {line_num}: $defineblock requires a variable name")
+                    self._add_diagnostic("error", line_num, "$defineblock requires a variable name")
+                else:
+                    blk_name = raw_parts[1]
+                    # find opening {
+                    if "{" not in stripped:
+                        while i < len(all_lines) and "{" not in all_lines[i]:
+                            i += 1
+                        if i >= len(all_lines):
+                            raise QCCompileError(
+                                f"Line {line_num}: $defineblock '{blk_name}' is missing opening {{"
+                            )
+                        i += 1  # skip the line containing {
+                    # collect content until }
+                    blk_lines: list[str] = []
+                    while i < len(all_lines):
+                        bl = all_lines[i].strip()
+                        i += 1
+                        if bl == "}":
+                            break
+                        if not bl or bl.startswith("//"):
+                            continue
+                        substituted_bl, _ = self._substitute_variables(bl, line_num)
+                        blk_lines.append(substituted_bl)
+                    blk_value = "\n".join(blk_lines)
+                    # conflict / redefinition checks
+                    if blk_name in self.json_vars:
+                        output_lines.append(f"// Overridden by JSON config: $defineblock {blk_name}\n")
+                    elif blk_name in self.block_vars:
+                        raise QCCompileError(
+                            f"Line {line_num}: $defineblock '{blk_name}' cannot be redefined"
+                        )
+                    elif blk_name in self.defined_vars:
+                        raise QCCompileError(
+                            f"Line {line_num}: $defineblock '{blk_name}' conflicts with "
+                            f"an existing $definevariable of the same name"
+                        )
+                    else:
+                        self.variables[blk_name]  = blk_value
+                        self.defined_vars.add(blk_name)
+                        self.block_vars.add(blk_name)
+                continue
+
             # Variable definition commands are handled before global substitution so that
             # expressions like "1/$ReScale$" are substituted only on the value portion and
             # correctly evaluated even when the surrounding line has no other variable refs.
@@ -1682,6 +2529,7 @@ class QCProcessor:
                         pose_base, self.root_dir, vrd_name, self.current_scale, logger=self.logger,
                         restpose_path=restpose[0] if restpose else None,
                         restpose_frame=restpose[1] if restpose else 0,
+                        autotrigger=block.get("autotrigger"),
                     )
                 except Exception as e:
                     raise QCCompileError(f"Line {line_num}: Failed to generate VRD for '{driver_bone}': {e}")
@@ -2039,6 +2887,88 @@ class QCProcessor:
                     raise
                 except Exception as e:
                     raise QCCompileError(f"Line {line_num}: Failed to read '{dmx_raw}': {e}")
+                continue
+
+            # ----------------------------------------------------------
+            # $staticbody - bake pose, strip skeleton and flex, emit $body
+            # ----------------------------------------------------------
+
+            if command == "$staticbody":
+                if len(parts) < 3:
+                    raise QCCompileError(
+                        f"Line {line_num}: $staticbody requires a name and a mesh file path"
+                    )
+                body_name = parts[1].strip('"')
+                mesh_raw  = parts[2].strip('"')
+
+                block, i = self._parse_staticbody_block(all_lines, i)
+                if block is None:
+                    raise QCCompileError(
+                        f"Line {line_num}: $staticbody '{body_name}': missing or malformed block"
+                    )
+                if not block.get("pose_raw"):
+                    raise QCCompileError(
+                        f"Line {line_num}: $staticbody '{body_name}': 'pose' sub-directive is required"
+                    )
+
+                mesh_path = self._resolve_mesh_path(mesh_raw, base_dir)
+                if not mesh_path:
+                    raise QCCompileError(
+                        f"Line {line_num}: $staticbody could not resolve mesh '{mesh_raw}'"
+                    )
+                if mesh_path.suffix.lower() != ".dmx":
+                    raise QCCompileError(
+                        f"Line {line_num}: $staticbody requires a DMX mesh file, got '{mesh_raw}'"
+                    )
+
+                pose_path = self._resolve_mesh_path(block["pose_raw"], base_dir)
+                if not pose_path:
+                    raise QCCompileError(
+                        f"Line {line_num}: $staticbody could not resolve pose '{block['pose_raw']}'"
+                    )
+
+                try:
+                    out_path = bake_static_mesh(
+                        mesh_path,
+                        pose_path,
+                        block["frame_idx"],
+                        block["origin"],
+                        self.logger,
+                        del_names  = block["del_names"] or None,
+                        keep_names = block["keep_names"],
+                    )
+                except Exception as e:
+                    raise QCCompileError(
+                        f"Line {line_num}: $staticbody '{body_name}' failed: {e}"
+                    )
+
+                orig_dir = str(Path(mesh_raw).parent)
+                rel_path = (
+                    out_path.name if orig_dir == "."
+                    else f"{orig_dir}/{out_path.name}".replace("\\", "/")
+                )
+                output_lines.append(f'$body "{body_name}" "{rel_path}"\n')
+                continue
+
+            # ----------------------------------------------------------
+            # $deltaproportions - generate two skeleton files and $animation lines
+            # ----------------------------------------------------------
+
+            if command == "$deltaproportions":
+                if len(parts) < 2:
+                    raise QCCompileError(f"Line {line_num}: $deltaproportions requires an output name")
+                output_name = parts[1].strip('"')
+                block, i    = self._parse_deltaproportions_block(all_lines, i)
+                if block is None:
+                    raise QCCompileError(f"Line {line_num}: $deltaproportions: missing or malformed block")
+                if block.get("_return"):
+                    return output_lines
+                if block.get("referencepose") is None:
+                    raise QCCompileError(f"Line {line_num}: $deltaproportions: 'referencepose' is required")
+                if block.get("proportionpose") is None:
+                    raise QCCompileError(f"Line {line_num}: $deltaproportions: 'proportionpose' is required")
+                result_lines = self._generate_deltaproportions(line_num, output_name, block, base_dir)
+                output_lines.extend(result_lines)
                 continue
 
             # ----------------------------------------------------------
