@@ -1,5 +1,8 @@
 from pathlib import Path
 from intern.formats import bone_animations
+from intern.utils import PROCESSED_ASSETS_DIRNAME
+import hashlib
+import json
 import shlex
 
 
@@ -7,8 +10,61 @@ def _strip_prefix(bone_name: str) -> str:
     return bone_name.split('.')[-1]
 
 
-def _load_euler_frames(filepath: Path, scale: float) -> bone_animations.BoneFrameData:
-    """Load a DMX or SMD file and return euler-degree frames, with scale applied."""
+def _file_content_sig(path: Path) -> str:
+    """Short content signature (truncated SHA-256) of *path*, or "nosig"."""
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(65_536), b""):
+                h.update(chunk)
+        return h.hexdigest()[:16]
+    except OSError:
+        return "nosig"
+
+
+def _vrd_signature(parts) -> str:
+    """Stable hash of all inputs that determine a generated VRD's contents."""
+    return hashlib.sha256(
+        json.dumps(parts, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()[:24]
+
+
+def _vrd_cache_hit(vrd_path: Path, sig_path: Path, sig: str, logger) -> bool:
+    """True when a previously generated VRD with the same signature exists."""
+    if not (vrd_path.exists() and sig_path.exists()):
+        return False
+    try:
+        if sig_path.read_text(encoding="utf-8").strip() == sig:
+            if logger:
+                logger.info(f"(VRD cached): {vrd_path.name}")
+            return True
+    except OSError:
+        pass
+    return False
+
+
+def _write_vrd(out_dir: Path, vrd_name: str, vrd_lines: list, sig: str, logger) -> Path:
+    """Write the VRD plus its signature sidecar, and return the VRD path."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    vrd_path = out_dir / f"{vrd_name}.vrd"
+    vrd_path.write_text("\n".join(vrd_lines), encoding="utf-8")
+    try:
+        (out_dir / f"{vrd_name}.vrd.sig").write_text(sig, encoding="utf-8")
+    except OSError:
+        pass
+    if logger:
+        logger.info(f"(VRD generated): {vrd_path.name}")
+    return vrd_path
+
+
+def _load_euler_frames(filepath: Path, scale: float, frame_cache=None) -> bone_animations.BoneFrameData:
+    """Load a DMX or SMD file and return euler-degree frames, with scale applied.
+
+    When *frame_cache* (a dict) is supplied, results are memoized by
+    ``(resolved_path, scale)`` so a pose file shared by many VRD blocks is
+    parsed and converted only once per build. Returned frames are treated as
+    read-only by callers, so sharing them is safe.
+    """
     ext = filepath.suffix.lower()
     if not ext:
         for candidate_ext in (".dmx", ".smd"):
@@ -17,6 +73,10 @@ def _load_euler_frames(filepath: Path, scale: float) -> bone_animations.BoneFram
                 filepath = candidate
                 ext = candidate_ext
                 break
+
+    key = (str(filepath), scale)
+    if frame_cache is not None and key in frame_cache:
+        return frame_cache[key]
 
     if ext == ".smd":
         frames = bone_animations.frames_rotation_to_degrees(
@@ -33,6 +93,9 @@ def _load_euler_frames(filepath: Path, scale: float) -> bone_animations.BoneFram
 
     if scale != 1.0:
         frames = bone_animations.apply_world_scale(frames, scale)
+
+    if frame_cache is not None:
+        frame_cache[key] = frames
 
     return frames
 
@@ -51,10 +114,21 @@ def _resolve_pose_file(pose_dir: Path, pose_path: str) -> Path:
 def generate_lookat_vrd(target_bone: str, attachment_name: str, frame_index: int, aimvector: tuple,
                         upvector: tuple, helper_bones: list[str], pose_path: str,
                         pose_dir: Path, vrd_dir: Path, vrd_name: str,
-                        scale: float = 1.0, logger=None) -> Path:
+                        scale: float = 1.0, logger=None, frame_cache=None) -> Path:
 
-    pose_file    = _resolve_pose_file(pose_dir, pose_path)
-    euler_frames = _load_euler_frames(pose_file, scale)
+    pose_file = _resolve_pose_file(pose_dir, pose_path)
+
+    out_dir  = vrd_dir / PROCESSED_ASSETS_DIRNAME / "vrds"
+    vrd_path = out_dir / f"{vrd_name}.vrd"
+    sig_path = out_dir / f"{vrd_name}.vrd.sig"
+    sig = _vrd_signature([
+        "lookat", _file_content_sig(pose_file), target_bone, attachment_name,
+        frame_index, list(aimvector), list(upvector), list(helper_bones), scale,
+    ])
+    if _vrd_cache_hit(vrd_path, sig_path, sig, logger):
+        return vrd_path
+
+    euler_frames = _load_euler_frames(pose_file, scale, frame_cache=frame_cache)
 
     if frame_index >= len(euler_frames):
         frame_index = len(euler_frames) - 1
@@ -85,23 +159,31 @@ def generate_lookat_vrd(target_bone: str, attachment_name: str, frame_index: int
         vrd_lines.append(f"<upvector>\t\t{uv}")
         vrd_lines.append("")
 
-    out_dir  = vrd_dir / "vrds"
-    out_dir.mkdir(exist_ok=True)
-    vrd_path = out_dir / f"{vrd_name}.vrd"
-    vrd_path.write_text("\n".join(vrd_lines), encoding="utf-8")
-
-    if logger: logger.info(f"(VRD generated): {vrd_path.name}")
-    return vrd_path
+    return _write_vrd(out_dir, vrd_name, vrd_lines, sig, logger)
 
 
 def generate_vrd(driver_bone: str, pose_path: str, triggers: list[tuple[float, int]],
                  target_bones: list[str], pose_dir: Path, vrd_dir: Path, vrd_name: str,
                  scale: float = 1.0, logger=None,
                  restpose_path: str | None = None, restpose_frame: int = 0,
-                 autotrigger: tuple[int, int] | None = None) -> Path:
+                 autotrigger: tuple[int, int] | None = None, frame_cache=None) -> Path:
 
-    pose_file    = _resolve_pose_file(pose_dir, pose_path)
-    euler_frames = _load_euler_frames(pose_file, scale)
+    pose_file = _resolve_pose_file(pose_dir, pose_path)
+    rp_file   = _resolve_pose_file(pose_dir, restpose_path) if restpose_path is not None else None
+
+    out_dir  = vrd_dir / PROCESSED_ASSETS_DIRNAME / "vrds"
+    vrd_path = out_dir / f"{vrd_name}.vrd"
+    sig_path = out_dir / f"{vrd_name}.vrd.sig"
+    sig = _vrd_signature([
+        "driver", _file_content_sig(pose_file),
+        _file_content_sig(rp_file) if rp_file else None,
+        driver_bone, list(target_bones), [list(t) for t in triggers], scale,
+        list(autotrigger) if autotrigger else None, restpose_frame,
+    ])
+    if _vrd_cache_hit(vrd_path, sig_path, sig, logger):
+        return vrd_path
+
+    euler_frames = _load_euler_frames(pose_file, scale, frame_cache=frame_cache)
 
     if autotrigger is not None:
         total = len(euler_frames)
@@ -128,9 +210,8 @@ def generate_vrd(driver_bone: str, pose_path: str, triggers: list[tuple[float, i
     pose_rest_map  = None   # pose frame-0 transforms, for delta computation
 
     if restpose_path is not None:
-        rp_file = _resolve_pose_file(pose_dir, restpose_path)
         try:
-            rp_frames = _load_euler_frames(rp_file, scale)
+            rp_frames = _load_euler_frames(rp_file, scale, frame_cache=frame_cache)
         except Exception as e:
             raise ValueError(f"Failed to load restpose '{restpose_path}': {e}")
 
@@ -209,10 +290,4 @@ def generate_vrd(driver_bone: str, pose_path: str, triggers: list[tuple[float, i
 
         vrd_lines.append("")
 
-    out_dir  = vrd_dir / "vrds"
-    out_dir.mkdir(exist_ok=True)
-    vrd_path = out_dir / f"{vrd_name}.vrd"
-    vrd_path.write_text("\n".join(vrd_lines), encoding="utf-8")
-
-    if logger: logger.info(f"(VRD generated): {vrd_path.name}")
-    return vrd_path
+    return _write_vrd(out_dir, vrd_name, vrd_lines, sig, logger)

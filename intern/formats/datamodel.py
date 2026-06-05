@@ -1041,11 +1041,17 @@ def load(path = None, in_file = None, element_path = None):
 					if attr_type in _dmxtypes:
 						elem[name] = get_value(attr_type)
 					elif attr_type in _dmxtypes_array:
-						array_len = get_int(in_file)
 						arr = elem[name] = attr_type()
-						arr_item_type = _get_single_type(attr_type)
-						for _ in range(array_len):
-							arr.append( get_value(arr_item_type,from_array=True) )
+						# Fast path: scalar int/float arrays (vertex indices, joint
+						# weights, etc.) decode in one bulk unpack instead of a
+						# Python call per element. Produces identical values.
+						if type(arr) in (_IntArray, _FloatArray):
+							arr.frombytes(in_file)
+						else:
+							array_len = get_int(in_file)
+							arr_item_type = _get_single_type(attr_type)
+							for _ in range(array_len):
+								arr.append( get_value(arr_item_type,from_array=True) )
 
 			# prefix attributes
 			if encoding_ver >= 9:

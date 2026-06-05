@@ -5,6 +5,11 @@ IS_DEV_BUILD: bool = True
 SOFTVERSION: str = "0"
 SOFTBUILDDATE: str = "dev"
 
+# Subfolder (next to source assets) that collects generated intermediates —
+# edited DMX, scaled/generated VRDs, baked static meshes — instead of dumping
+# them alongside the originals. Mirrors the ".processed-qc" convention.
+PROCESSED_ASSETS_DIRNAME: str = ".processed-assets"
+
 def _compute_exe_sha256() -> "str | None":
     if IS_DEV_BUILD:
         return None

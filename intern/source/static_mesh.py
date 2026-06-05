@@ -10,6 +10,7 @@ import zlib
 from math import cos, sin, radians, sqrt
 from pathlib import Path
 
+from intern.utils import PROCESSED_ASSETS_DIRNAME
 from intern.formats import datamodel
 from intern.formats.bone_animations import (
     _euler_to_quat,
@@ -282,7 +283,7 @@ def bake_static_mesh(
     crc = zlib.crc32(
         f"static:{pose_path}:{frame_idx}:{origin_key}:{filter_key}".encode()
     ) & 0xFFFFFFFF
-    out_path = mesh_path.parent / f"{mesh_path.stem}_static_{crc:08x}.dmx"
+    out_path = mesh_path.parent / PROCESSED_ASSETS_DIRNAME / f"{mesh_path.stem}_static_{crc:08x}.dmx"
 
     orig_enc, orig_ver = _sniff_encoding(mesh_path)
 
@@ -537,6 +538,7 @@ def bake_static_mesh(
                         val.remove(fe)
 
     # ---- write ------------------------------------------------------------
+    out_path.parent.mkdir(parents=True, exist_ok=True)
     dm.write(str(out_path), orig_enc, orig_ver)
     if logger:
         logger.info(f"$staticbody: wrote baked mesh → '{out_path.name}'")

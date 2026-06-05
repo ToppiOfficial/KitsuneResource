@@ -2,7 +2,7 @@ import shlex, re
 from simpleeval import simple_eval
 from pathlib import Path
 from typing import Optional
-from intern.utils import Logger, SOFTVERSION, SOFTBUILDDATE
+from intern.utils import Logger, SOFTVERSION, SOFTBUILDDATE, PROCESSED_ASSETS_DIRNAME
 from intern.source import vrd as vrd_module
 from intern.source import flex_controllers
 from intern.source.static_mesh import bake_static_mesh
@@ -19,6 +19,36 @@ RED    = "\033[91m"
 RESET  = "\033[0m"
 
 _CMP_RE = re.compile(r'^\s*([^\s"]+|"[^"]+")\s*(==|!=|>=|<=|>|<)\s*([^\s"]+|"[^"]+")\s*$')
+
+
+def _content_sig(path) -> str:
+    """Return a short content signature (truncated SHA-256 hex) for *path*.
+
+    Used to key generated-file caches on the *source's content* so a cached
+    output is reused only while the source is byte-identical, and regenerated
+    automatically when the source is re-exported. Content hashing (not mtime)
+    matches the convention in ``intern/assets/texture_cache.py``. Returns
+    ``"nosig"`` if the file cannot be read, which simply disables the cache hit.
+    """
+    import hashlib
+    try:
+        h = hashlib.sha256()
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(65_536), b""):
+                h.update(chunk)
+        return h.hexdigest()[:16]
+    except OSError:
+        return "nosig"
+
+
+def _processed_asset_ref(orig_dir: str, filename: str) -> str:
+    """Build the QC reference for a generated file relocated into the
+    ``.processed-assets`` subfolder, preserving the original directory anchor so
+    studiomdl still resolves it relative to the QC."""
+    sub = PROCESSED_ASSETS_DIRNAME
+    if orig_dir == ".":
+        return f"{sub}/{filename}"
+    return f"{orig_dir}/{sub}/{filename}".replace("\\", "/")
 
 
 def _is_in_qc_comment(text: str, pos: int) -> bool:
@@ -277,6 +307,10 @@ class QCProcessor:
         self.compiler            = compiler
         self.vrd_prefix          = vrd_prefix
         self.vrd_name_counts     = {}
+        # In-run memo for loaded+converted pose frames, keyed by (path, scale),
+        # so many $driverbone/$driverlookatbone blocks sharing a pose file parse
+        # it only once per build. Read-only frames; safe to share.
+        self._pose_frame_cache   = {}
         self.error_count: int    = 0
         self._diagnostics: list[tuple[str, int | None, str]] = []
 
@@ -885,6 +919,9 @@ class QCProcessor:
         """
         import zlib
         key_parts: list[str] = []
+        # Source content signature first: invalidates the cache whenever the
+        # source DMX is re-exported, even if the edit set is unchanged.
+        key_parts.append("src:" + _content_sig(dmx_path))
         if strip_flex:
             key_parts.append("norules")
         if del_names:
@@ -892,7 +929,14 @@ class QCProcessor:
         if keep_names:
             key_parts.append("keep:" + ",".join(keep_names))
         crc      = zlib.crc32("|".join(key_parts).encode()) & 0xFFFFFFFF
-        out_path = dmx_path.parent / f"{dmx_path.stem}_{crc:08x}.dmx"
+        out_path = dmx_path.parent / PROCESSED_ASSETS_DIRNAME / f"{dmx_path.stem}_{crc:08x}.dmx"
+
+        # Skip the load-edit-write entirely when an identical edit of the
+        # identical source already exists.
+        if out_path.exists():
+            if self.logger:
+                self.logger.info(f"dmx edit: reusing cached '{out_path.name}'")
+            return out_path
 
         # ---- sniff original encoding / version ----------------------------------
         orig_enc, orig_ver = "keyvalues2", 1
@@ -1034,6 +1078,7 @@ class QCProcessor:
                             while e in val:
                                 val.remove(e)
 
+        out_path.parent.mkdir(parents=True, exist_ok=True)
         dm.write(str(out_path), orig_enc, orig_ver)
         if self.logger:
             self.logger.info(f"dmx edit: wrote '{out_path.name}'")
@@ -1048,8 +1093,10 @@ class QCProcessor:
         the scale key so that identical inputs always produce the same file.
         """
         import zlib
-        crc      = zlib.crc32(f"scale:{scale:.6g}".encode()) & 0xFFFFFFFF
-        out_path = vrd_path.parent / f"{vrd_path.stem}_{crc:08x}.vrd"
+        # Key on source content + scale so a re-edited source VRD invalidates
+        # the cached scaled copy instead of returning a stale one.
+        crc      = zlib.crc32(f"src:{_content_sig(vrd_path)}|scale:{scale:.6g}".encode()) & 0xFFFFFFFF
+        out_path = vrd_path.parent / PROCESSED_ASSETS_DIRNAME / f"{vrd_path.stem}_{crc:08x}.vrd"
 
         if out_path.exists():
             return out_path
@@ -1089,6 +1136,7 @@ class QCProcessor:
 
             out_lines.append(raw)
 
+        out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text("\n".join(out_lines), encoding="utf-8")
         if self.logger:
             self.logger.info(f"(VRD scaled x{scale:g}): {out_path.name}")
@@ -1274,10 +1322,7 @@ class QCProcessor:
                 )
 
             orig_dir = str(Path(studio_path_raw).parent)
-            rel_path = (
-                out_path.name if orig_dir == "."
-                else f"{orig_dir}/{out_path.name}".replace("\\", "/")
-            )
+            rel_path = _processed_asset_ref(orig_dir, out_path.name)
             out.append(f'studio "{rel_path}"\n')
 
         return out
@@ -2426,15 +2471,17 @@ class QCProcessor:
                                 f"Line {line_num}: $defineblock '{blk_name}' is missing opening {{"
                             )
                         i += 1  # skip the line containing {
-                    # collect content until }
+                    # collect content until the matching closing brace (tracks nested braces)
                     blk_lines: list[str] = []
+                    depth = 1
                     while i < len(all_lines):
                         bl = all_lines[i].strip()
                         i += 1
-                        if bl == "}":
-                            break
                         if not bl or bl.startswith("//"):
                             continue
+                        depth += bl.count("{") - bl.count("}")
+                        if depth <= 0:
+                            break
                         substituted_bl, _ = self._substitute_variables(bl, line_num)
                         blk_lines.append(substituted_bl)
                     blk_value = "\n".join(blk_lines)
@@ -2468,6 +2515,17 @@ class QCProcessor:
                 result = self._handle_redefine_variable(raw_parts, line_num, stripped)
                 if result: output_lines.append(result)
                 continue
+
+            # Sole $block$ reference: splice stored lines into the stream so multi-line /
+            # nested-brace content (e.g. $body … isolatemesh { }) is handled line-by-line
+            # rather than collapsed into one flattened command.
+            if len(raw_parts) == 1:
+                _blk_m = re.fullmatch(r'\$(\w+)\$', raw_parts[0])
+                if _blk_m and _blk_m.group(1) in self.block_vars:
+                    _blk_text = self.variables.get(_blk_m.group(1), "")
+                    if _blk_text:
+                        all_lines[i:i] = [bl + "\n" for bl in _blk_text.split("\n")]
+                    continue
 
             # Global variable substitution for all remaining commands
             line, has_sub_error = self._substitute_variables(raw_line, line_num)
@@ -2530,6 +2588,7 @@ class QCProcessor:
                         restpose_path=restpose[0] if restpose else None,
                         restpose_frame=restpose[1] if restpose else 0,
                         autotrigger=block.get("autotrigger"),
+                        frame_cache=self._pose_frame_cache,
                     )
                 except Exception as e:
                     raise QCCompileError(f"Line {line_num}: Failed to generate VRD for '{driver_bone}': {e}")
@@ -2539,7 +2598,7 @@ class QCProcessor:
                         output_lines.append(f'$bonemerge "{target_bone}"\n')
                         new_bonemerge.add(target_bone)
                 output_lines.append(f'// VRD Scale: {self.current_scale}"\n')
-                output_lines.append(f'$proceduralbones "vrds/{vrd_name}.vrd"\n')
+                output_lines.append(f'$proceduralbones "{PROCESSED_ASSETS_DIRNAME}/vrds/{vrd_name}.vrd"\n')
                 continue
 
             if command == "$driverlookatbone":
@@ -2598,7 +2657,8 @@ class QCProcessor:
                     vrd_module.generate_lookat_vrd(
                         target_bone, attachment_name, block["frame"], block["aimvector"], block["upvector"],
                         block["helper_bones"], block["pose"], pose_base, self.root_dir, vrd_name,
-                        self.current_scale, logger=self.logger
+                        self.current_scale, logger=self.logger,
+                        frame_cache=self._pose_frame_cache,
                     )
                 except Exception as e:
                     raise QCCompileError(f"Line {line_num}: Failed to generate lookat VRD for '{target_bone}': {e}")
@@ -2608,7 +2668,7 @@ class QCProcessor:
                         output_lines.append(f'$bonemerge "{helper_bone}"\n')
                         new_bonemerge.add(helper_bone)
                 output_lines.append(f'// VRD Scale: {self.current_scale}\n')
-                output_lines.append(f'$proceduralbones "vrds/{vrd_name}.vrd"\n')
+                output_lines.append(f'$proceduralbones "{PROCESSED_ASSETS_DIRNAME}/vrds/{vrd_name}.vrd"\n')
                 continue
 
             # ----------------------------------------------------------
@@ -2730,10 +2790,7 @@ class QCProcessor:
                                 keep_names=keep_names_m,
                             )
                             orig_dir        = str(Path(mesh_raw).parent)
-                            final_mesh_path = (
-                                out_path.name if orig_dir == "."
-                                else f"{orig_dir}/{out_path.name}".replace("\\", "/")
-                            )
+                            final_mesh_path = _processed_asset_ref(orig_dir, out_path.name)
                             dmx_path = out_path   # flex-controller injection reads the edited file
                         except Exception as e:
                             raise QCCompileError(f"Line {line_num}: $model mesh edit failed: {e}")
@@ -2943,10 +3000,7 @@ class QCProcessor:
                     )
 
                 orig_dir = str(Path(mesh_raw).parent)
-                rel_path = (
-                    out_path.name if orig_dir == "."
-                    else f"{orig_dir}/{out_path.name}".replace("\\", "/")
-                )
+                rel_path = _processed_asset_ref(orig_dir, out_path.name)
                 output_lines.append(f'$body "{body_name}" "{rel_path}"\n')
                 continue
 
@@ -3033,10 +3087,7 @@ class QCProcessor:
                         )
 
                     orig_dir = str(Path(mesh_raw).parent)
-                    rel_path = (
-                        out_path.name if orig_dir == "."
-                        else f"{orig_dir}/{out_path.name}".replace("\\", "/")
-                    )
+                    rel_path = _processed_asset_ref(orig_dir, out_path.name)
                     output_lines.append(f'$body "{body_name}" "{rel_path}"\n')
                     continue
                 # No edit blocks - fall through to passthrough below.
@@ -3166,10 +3217,7 @@ class QCProcessor:
                             try:
                                 out_path = self._make_edited_dmx(dmx_path, del_names, keep_names=keep_names)
                                 orig_dir = str(Path(file_str).parent)
-                                file_str = (
-                                    out_path.name if orig_dir == "."
-                                    else f"{orig_dir}/{out_path.name}".replace("\\", "/")
-                                )
+                                file_str = _processed_asset_ref(orig_dir, out_path.name)
                             except Exception as e:
                                 raise QCCompileError(
                                     f"Line {line_num}: $rendermeshlist mesh edit failed for '{mesh_name}': {e}"
@@ -3276,10 +3324,7 @@ class QCProcessor:
                         try:
                             scaled_path = self._scale_vrd(vrd_file, self.current_scale)
                             orig_dir    = str(Path(vrd_raw).parent)
-                            rel_path    = (
-                                scaled_path.name if orig_dir == "."
-                                else f"{orig_dir}/{scaled_path.name}".replace("\\", "/")
-                            )
+                            rel_path    = _processed_asset_ref(orig_dir, scaled_path.name)
                             output_lines.append(f'$proceduralbones "{rel_path}"\n')
                             continue
                         except Exception as e:
