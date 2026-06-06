@@ -11,6 +11,7 @@ from intern.game.gameinfo import get_game_search_paths
 from intern.game.archiver import Archiver
 from intern.game.packager import package_archive
 from intern.source.qc import process_qc_file
+from intern.source.cache_tracker import ProcessedAssetsTracker
 from .data_processor import DataProcessor
 
 
@@ -69,10 +70,11 @@ class ModelCompiler:
 
     def _compile_single_qc(self, qc_path: Path, base_name: str, variables: dict,
                             output_dir: Optional[Path], game_dir: Optional[Path],
-                            logger: Logger, include_dirs: list = None):
+                            logger: Logger, include_dirs: list = None,
+                            tracker: ProcessedAssetsTracker = None):
         temp_qc, preprocess_errors = self._process_qc(
             qc_path, logger, base_name=base_name,
-            variables=variables, include_dirs=include_dirs,
+            variables=variables, include_dirs=include_dirs, tracker=tracker,
         )
 
         success = False
@@ -104,7 +106,8 @@ class ModelCompiler:
         return success, moved_files
 
     def compile_model(self, model_name: str, model_data: dict, compile_root: Path,
-                      global_vars: dict = None) -> tuple[bool, list[Path], Optional[Path]]:
+                      global_vars: dict = None,
+                      tracker: ProcessedAssetsTracker = None) -> tuple[bool, list[Path], Optional[Path]]:
         self.logger.info("")
         model_logger = self.logger.with_context("MODEL")
 
@@ -159,7 +162,7 @@ class ModelCompiler:
 
         success, moved_files = self._compile_single_qc(
             qc_path, model_name, main_model_defines, output_dir, game_dir,
-            model_logger, include_dirs=include_dirs,
+            model_logger, include_dirs=include_dirs, tracker=tracker,
         )
 
         if not success:
@@ -176,6 +179,7 @@ class ModelCompiler:
             targeted_model_vars=targeted_model_defines,
             model_name=model_name,
             include_dirs=include_dirs,
+            tracker=tracker,
         )
 
         if not self.args.game:
@@ -184,7 +188,8 @@ class ModelCompiler:
         return True, moved_files, output_dir
 
     def _process_qc(self, qc_path: Path, logger: Logger, base_name: str,
-                    variables: dict = None, include_dirs: list = None) -> tuple[Path, int]:
+                    variables: dict = None, include_dirs: list = None,
+                    tracker: ProcessedAssetsTracker = None) -> tuple[Path, int]:
         temp_qc_name = f"temp_{base_name}.qc"
         temp_qc = qc_path.parent / temp_qc_name
 
@@ -193,7 +198,7 @@ class ModelCompiler:
         qc_content, error_count = process_qc_file(
             qc_path, logger=logger, _variables=variables,
             include_dirs=include_dirs, compiler=compiler_name,
-            vrd_prefix=base_name,
+            vrd_prefix=base_name, tracker=tracker,
         )
 
         with open(temp_qc, 'w', encoding='utf-8') as dst:
@@ -210,7 +215,8 @@ class ModelCompiler:
                            all_moved_files: list, logger: Logger, game_dir: Optional[Path],
                            global_vars: dict, regular_model_vars: dict,
                            targeted_model_vars: dict, model_name: str = "",
-                           include_dirs: list = None):
+                           include_dirs: list = None,
+                           tracker: ProcessedAssetsTracker = None):
         for sub_name, sub_qc_file in model_data.get("submodels", {}).items():
             self.logger.root.submodel_total += 1
 
@@ -232,6 +238,7 @@ class ModelCompiler:
             success, sub_moved = self._compile_single_qc(
                 sub_qc_path, f"{model_name}_{sub_name}", submodel_defines,
                 output_dir, game_dir, logger, include_dirs=include_dirs,
+                tracker=tracker,
             )
 
             if success:
@@ -491,18 +498,24 @@ class ValveModelPipeline:
         global_define_vars = self.config.get("definevariable", {})
         only_filter = [e.lower() for e in self.args.only] if self.args.only else None
         results: list[tuple[list[Path], Optional[Path]]] = []
+        tracker = ProcessedAssetsTracker()
 
         for model_name, model_data in self.config.get("model", {}).items():
             self.logger.root.model_total += 1
             if only_filter and model_name.lower() not in only_filter:
                 continue
             success, moved_files, output_dir = compiler.compile_model(
-                model_name, model_data, tools.compile_root, global_vars=global_define_vars
+                model_name, model_data, tools.compile_root, global_vars=global_define_vars,
+                tracker=tracker,
             )
             if success:
                 self.logger.root.model_compiled += 1
                 mdl_files = [f for f in moved_files if f.suffix.lower() == ".mdl"]
                 results.append((mdl_files, output_dir))
+
+        deleted = tracker.sweep(self.logger)
+        if deleted:
+            self.logger.info(f"Cache sweep: removed {deleted} stale processed-asset file(s)")
 
         return results
 

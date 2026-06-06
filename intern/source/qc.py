@@ -3,6 +3,7 @@ from simpleeval import simple_eval
 from pathlib import Path
 from typing import Optional
 from intern.utils import Logger, SOFTVERSION, SOFTBUILDDATE, PROCESSED_ASSETS_DIRNAME
+from intern.source.cache_tracker import ProcessedAssetsTracker
 from intern.source import vrd as vrd_module
 from intern.source import flex_controllers
 from intern.source.static_mesh import bake_static_mesh
@@ -290,6 +291,7 @@ class QCProcessor:
         current_scale: float  = 1.0,
         compiler: str         = None,
         vrd_prefix: str       = None,
+        tracker: "ProcessedAssetsTracker" = None,
     ):
         self.variables           = variables if variables is not None else {}
         self.macros              = macros    if macros    is not None else {}
@@ -313,6 +315,7 @@ class QCProcessor:
         self._pose_frame_cache   = {}
         self.error_count: int    = 0
         self._diagnostics: list[tuple[str, int | None, str]] = []
+        self.tracker: "ProcessedAssetsTracker | None" = tracker
 
     def _add_diagnostic(self, level: str, line_num: int | None, message: str) -> None:
         self._diagnostics.append((level, line_num, message))
@@ -334,6 +337,50 @@ class QCProcessor:
                 return tokens
         except ValueError:
             return []
+
+    @staticmethod
+    def _strip_source_comments(lines: list) -> list:
+        result = []
+        in_block = False
+        for line in lines:
+            out = []
+            i = 0
+            in_str = False
+            eol = '\n' if line.endswith('\n') else ''
+            broke_at_line_comment = False
+            while i < len(line):
+                c = line[i]
+                if in_block:
+                    if c == '*' and i + 1 < len(line) and line[i + 1] == '/':
+                        in_block = False
+                        i += 2
+                    else:
+                        i += 1
+                    continue
+                if in_str:
+                    out.append(c)
+                    if c == '"':
+                        in_str = False
+                    i += 1
+                    continue
+                if c == '"':
+                    in_str = True
+                    out.append(c)
+                    i += 1
+                elif c == '/' and i + 1 < len(line) and line[i + 1] == '/':
+                    broke_at_line_comment = True
+                    break
+                elif c == '/' and i + 1 < len(line) and line[i + 1] == '*':
+                    in_block = True
+                    i += 2
+                else:
+                    out.append(c)
+                    i += 1
+            rebuilt = ''.join(out)
+            if broke_at_line_comment or in_block:
+                rebuilt = rebuilt.rstrip() + eol
+            result.append(rebuilt)
+        return result
 
     def _substitute_variables(self, line: str, line_num: int = None) -> tuple[str, bool]:
         has_error = False
@@ -936,6 +983,8 @@ class QCProcessor:
         if out_path.exists():
             if self.logger:
                 self.logger.info(f"dmx edit: reusing cached '{out_path.name}'")
+            if self.tracker:
+                self.tracker.claim(out_path)
             return out_path
 
         # ---- sniff original encoding / version ----------------------------------
@@ -1082,6 +1131,8 @@ class QCProcessor:
         dm.write(str(out_path), orig_enc, orig_ver)
         if self.logger:
             self.logger.info(f"dmx edit: wrote '{out_path.name}'")
+        if self.tracker:
+            self.tracker.claim(out_path)
         return out_path
 
     def _scale_vrd(self, vrd_path: Path, scale: float) -> Path:
@@ -1099,6 +1150,8 @@ class QCProcessor:
         out_path = vrd_path.parent / PROCESSED_ASSETS_DIRNAME / f"{vrd_path.stem}_{crc:08x}.vrd"
 
         if out_path.exists():
+            if self.tracker:
+                self.tracker.claim(out_path)
             return out_path
 
         out_lines = []
@@ -1140,6 +1193,8 @@ class QCProcessor:
         out_path.write_text("\n".join(out_lines), encoding="utf-8")
         if self.logger:
             self.logger.info(f"(VRD scaled x{scale:g}): {out_path.name}")
+        if self.tracker:
+            self.tracker.claim(out_path)
         return out_path
 
     def _parse_vrd_helper_bones(self, vrd_path: Path) -> list[str]:
@@ -2288,6 +2343,7 @@ class QCProcessor:
                 compiler=self.compiler,
                 vrd_prefix=self.vrd_prefix,
                 _shared_diagnostics=self._diagnostics,
+                tracker=self.tracker,
             )
             self.error_count += include_errors
             return "\n" + nested + "\n"
@@ -2314,7 +2370,7 @@ class QCProcessor:
         processor              = QCProcessor(self.variables.copy(), self.macros, self.logger,
                                              macro_args_override=arg_mapping, include_dirs=self.include_dirs,
                                              root_dir=self.root_dir, current_scale=self.current_scale,
-                                             compiler=self.compiler)
+                                             compiler=self.compiler, tracker=self.tracker)
         processor.defined_vars = self.defined_vars.copy()
         processor.pushd_stack  = list(self.pushd_stack)
         return processor.process_content("\n".join(macro_def["body"]) + "\n", base_dir, include_stack.copy())
@@ -2582,13 +2638,14 @@ class QCProcessor:
                 pose_base = self.pushd_stack[-1] if self.pushd_stack else self.root_dir
                 try:
                     restpose = block.get("restpose")
-                    vrd_module.generate_vrd(
+                    out_vrd = vrd_module.generate_vrd(
                         driver_bone, block["pose"], block["triggers"], block["target_bones"],
                         pose_base, self.root_dir, vrd_name, self.current_scale, logger=self.logger,
                         restpose_path=restpose[0] if restpose else None,
                         restpose_frame=restpose[1] if restpose else 0,
                         autotrigger=block.get("autotrigger"),
                         frame_cache=self._pose_frame_cache,
+                        tracker=self.tracker,
                     )
                 except Exception as e:
                     raise QCCompileError(f"Line {line_num}: Failed to generate VRD for '{driver_bone}': {e}")
@@ -2598,7 +2655,7 @@ class QCProcessor:
                         output_lines.append(f'$bonemerge "{target_bone}"\n')
                         new_bonemerge.add(target_bone)
                 output_lines.append(f'// VRD Scale: {self.current_scale}"\n')
-                output_lines.append(f'$proceduralbones "{PROCESSED_ASSETS_DIRNAME}/vrds/{vrd_name}.vrd"\n')
+                output_lines.append(f'$proceduralbones "{PROCESSED_ASSETS_DIRNAME}/vrds/{out_vrd.name}"\n')
                 continue
 
             if command == "$driverlookatbone":
@@ -2654,11 +2711,12 @@ class QCProcessor:
                         output_lines.append(f'$attachment "{attachment_name}" "{target_bone}" {pos_str} rotate {rot_str}\n')
 
                 try:
-                    vrd_module.generate_lookat_vrd(
+                    out_vrd = vrd_module.generate_lookat_vrd(
                         target_bone, attachment_name, block["frame"], block["aimvector"], block["upvector"],
                         block["helper_bones"], block["pose"], pose_base, self.root_dir, vrd_name,
                         self.current_scale, logger=self.logger,
                         frame_cache=self._pose_frame_cache,
+                        tracker=self.tracker,
                     )
                 except Exception as e:
                     raise QCCompileError(f"Line {line_num}: Failed to generate lookat VRD for '{target_bone}': {e}")
@@ -2668,7 +2726,7 @@ class QCProcessor:
                         output_lines.append(f'$bonemerge "{helper_bone}"\n')
                         new_bonemerge.add(helper_bone)
                 output_lines.append(f'// VRD Scale: {self.current_scale}\n')
-                output_lines.append(f'$proceduralbones "{PROCESSED_ASSETS_DIRNAME}/vrds/{vrd_name}.vrd"\n')
+                output_lines.append(f'$proceduralbones "{PROCESSED_ASSETS_DIRNAME}/vrds/{out_vrd.name}"\n')
                 continue
 
             # ----------------------------------------------------------
@@ -2993,6 +3051,7 @@ class QCProcessor:
                         self.logger,
                         del_names  = block["del_names"] or None,
                         keep_names = block["keep_names"],
+                        tracker    = self.tracker,
                     )
                 except Exception as e:
                     raise QCCompileError(
@@ -3430,6 +3489,7 @@ def process_qc_file(
     compiler: str          = None,
     vrd_prefix: str        = None,
     _shared_diagnostics: list = None,
+    tracker: "ProcessedAssetsTracker" = None,
 ) -> str:
 
     is_toplevel    = (_include_stack is None)
@@ -3457,7 +3517,8 @@ def process_qc_file(
                             root_dir=_root_dir,
                             current_scale=_current_scale,
                             compiler=compiler,
-                            vrd_prefix=vrd_prefix)
+                            vrd_prefix=vrd_prefix,
+                            tracker=tracker)
 
     if _shared_diagnostics is not None:
         processor._diagnostics = _shared_diagnostics
@@ -3468,6 +3529,8 @@ def process_qc_file(
 
     with resolved.open("r", encoding="utf-8", errors="ignore") as f:
         all_lines = f.readlines()
+
+    all_lines = QCProcessor._strip_source_comments(all_lines)
 
     try:
         output_lines = processor.process_file(resolved, all_lines, _include_stack)

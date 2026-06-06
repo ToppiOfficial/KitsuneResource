@@ -22,36 +22,23 @@ def _file_content_sig(path: Path) -> str:
         return "nosig"
 
 
-def _vrd_signature(parts) -> str:
-    """Stable hash of all inputs that determine a generated VRD's contents."""
+def _vrd_crc(parts) -> str:
+    """8-char hex CRC derived from all inputs that determine a VRD's contents.
+
+    Keying the output filename on content means a changed pose file or changed
+    parameters automatically produces a new file; the tracker sweep then removes
+    the old one, so no .vrd.sig sidecars are needed.
+    """
     return hashlib.sha256(
         json.dumps(parts, sort_keys=True, default=str).encode("utf-8")
-    ).hexdigest()[:24]
+    ).hexdigest()[:8]
 
 
-def _vrd_cache_hit(vrd_path: Path, sig_path: Path, sig: str, logger) -> bool:
-    """True when a previously generated VRD with the same signature exists."""
-    if not (vrd_path.exists() and sig_path.exists()):
-        return False
-    try:
-        if sig_path.read_text(encoding="utf-8").strip() == sig:
-            if logger:
-                logger.info(f"(VRD cached): {vrd_path.name}")
-            return True
-    except OSError:
-        pass
-    return False
-
-
-def _write_vrd(out_dir: Path, vrd_name: str, vrd_lines: list, sig: str, logger) -> Path:
-    """Write the VRD plus its signature sidecar, and return the VRD path."""
+def _write_vrd(out_dir: Path, vrd_name: str, vrd_lines: list, crc: str, logger) -> Path:
+    """Write the VRD to a CRC-named file and return its path."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    vrd_path = out_dir / f"{vrd_name}.vrd"
+    vrd_path = out_dir / f"{vrd_name}_{crc}.vrd"
     vrd_path.write_text("\n".join(vrd_lines), encoding="utf-8")
-    try:
-        (out_dir / f"{vrd_name}.vrd.sig").write_text(sig, encoding="utf-8")
-    except OSError:
-        pass
     if logger:
         logger.info(f"(VRD generated): {vrd_path.name}")
     return vrd_path
@@ -114,18 +101,22 @@ def _resolve_pose_file(pose_dir: Path, pose_path: str) -> Path:
 def generate_lookat_vrd(target_bone: str, attachment_name: str, frame_index: int, aimvector: tuple,
                         upvector: tuple, helper_bones: list[str], pose_path: str,
                         pose_dir: Path, vrd_dir: Path, vrd_name: str,
-                        scale: float = 1.0, logger=None, frame_cache=None) -> Path:
+                        scale: float = 1.0, logger=None, frame_cache=None,
+                        tracker=None) -> Path:
 
     pose_file = _resolve_pose_file(pose_dir, pose_path)
 
-    out_dir  = vrd_dir / PROCESSED_ASSETS_DIRNAME / "vrds"
-    vrd_path = out_dir / f"{vrd_name}.vrd"
-    sig_path = out_dir / f"{vrd_name}.vrd.sig"
-    sig = _vrd_signature([
+    out_dir = vrd_dir / PROCESSED_ASSETS_DIRNAME / "vrds"
+    crc = _vrd_crc([
         "lookat", _file_content_sig(pose_file), target_bone, attachment_name,
         frame_index, list(aimvector), list(upvector), list(helper_bones), scale,
     ])
-    if _vrd_cache_hit(vrd_path, sig_path, sig, logger):
+    vrd_path = out_dir / f"{vrd_name}_{crc}.vrd"
+    if vrd_path.exists():
+        if logger:
+            logger.info(f"(VRD cached): {vrd_path.name}")
+        if tracker:
+            tracker.claim(vrd_path)
         return vrd_path
 
     euler_frames = _load_euler_frames(pose_file, scale, frame_cache=frame_cache)
@@ -159,28 +150,35 @@ def generate_lookat_vrd(target_bone: str, attachment_name: str, frame_index: int
         vrd_lines.append(f"<upvector>\t\t{uv}")
         vrd_lines.append("")
 
-    return _write_vrd(out_dir, vrd_name, vrd_lines, sig, logger)
+    out = _write_vrd(out_dir, vrd_name, vrd_lines, crc, logger)
+    if tracker:
+        tracker.claim(out)
+    return out
 
 
 def generate_vrd(driver_bone: str, pose_path: str, triggers: list[tuple[float, int]],
                  target_bones: list[str], pose_dir: Path, vrd_dir: Path, vrd_name: str,
                  scale: float = 1.0, logger=None,
                  restpose_path: str | None = None, restpose_frame: int = 0,
-                 autotrigger: tuple[int, int] | None = None, frame_cache=None) -> Path:
+                 autotrigger: tuple[int, int] | None = None, frame_cache=None,
+                 tracker=None) -> Path:
 
     pose_file = _resolve_pose_file(pose_dir, pose_path)
     rp_file   = _resolve_pose_file(pose_dir, restpose_path) if restpose_path is not None else None
 
-    out_dir  = vrd_dir / PROCESSED_ASSETS_DIRNAME / "vrds"
-    vrd_path = out_dir / f"{vrd_name}.vrd"
-    sig_path = out_dir / f"{vrd_name}.vrd.sig"
-    sig = _vrd_signature([
+    out_dir = vrd_dir / PROCESSED_ASSETS_DIRNAME / "vrds"
+    crc = _vrd_crc([
         "driver", _file_content_sig(pose_file),
         _file_content_sig(rp_file) if rp_file else None,
         driver_bone, list(target_bones), [list(t) for t in triggers], scale,
         list(autotrigger) if autotrigger else None, restpose_frame,
     ])
-    if _vrd_cache_hit(vrd_path, sig_path, sig, logger):
+    vrd_path = out_dir / f"{vrd_name}_{crc}.vrd"
+    if vrd_path.exists():
+        if logger:
+            logger.info(f"(VRD cached): {vrd_path.name}")
+        if tracker:
+            tracker.claim(vrd_path)
         return vrd_path
 
     euler_frames = _load_euler_frames(pose_file, scale, frame_cache=frame_cache)
@@ -290,4 +288,7 @@ def generate_vrd(driver_bone: str, pose_path: str, triggers: list[tuple[float, i
 
         vrd_lines.append("")
 
-    return _write_vrd(out_dir, vrd_name, vrd_lines, sig, logger)
+    out = _write_vrd(out_dir, vrd_name, vrd_lines, crc, logger)
+    if tracker:
+        tracker.claim(out)
+    return out

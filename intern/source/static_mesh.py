@@ -270,6 +270,7 @@ def bake_static_mesh(
     logger=None,
     del_names: list = None,  # excludemesh names
     keep_names: list = None, # isolatemesh names
+    tracker=None,
 ) -> Path:
     """
     Deform *mesh_path* (DMX) to the skeletal pose in *pose_path* at *frame_idx*.
@@ -284,6 +285,13 @@ def bake_static_mesh(
         f"static:{pose_path}:{frame_idx}:{origin_key}:{filter_key}".encode()
     ) & 0xFFFFFFFF
     out_path = mesh_path.parent / PROCESSED_ASSETS_DIRNAME / f"{mesh_path.stem}_static_{crc:08x}.dmx"
+
+    if out_path.exists():
+        if logger:
+            logger.info(f"$staticbody: reusing cached '{out_path.name}'")
+        if tracker:
+            tracker.claim(out_path)
+        return out_path
 
     orig_enc, orig_ver = _sniff_encoding(mesh_path)
 
@@ -542,4 +550,6 @@ def bake_static_mesh(
     dm.write(str(out_path), orig_enc, orig_ver)
     if logger:
         logger.info(f"$staticbody: wrote baked mesh → '{out_path.name}'")
+    if tracker:
+        tracker.claim(out_path)
     return out_path
