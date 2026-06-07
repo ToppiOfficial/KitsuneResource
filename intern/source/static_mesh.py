@@ -514,6 +514,7 @@ def bake_static_mesh(
         # requires every DmeDag node in the hierarchy to appear in the list),
         # replace all DmeJoint bones with the single static_prop bone.
         # Preserve DmeModel at slot 0 if the original file had it there.
+        dag_entries = []
         if DmeModel.get("jointList") is not None:
             dag_entries = [j for j in original_jl if j.type == "DmeDag"]
             if model_at_slot0:
@@ -521,6 +522,21 @@ def bake_static_mesh(
             else:
                 new_jl = [sp_joint] + dag_entries
             DmeModel["jointList"] = datamodel.make_array(new_jl, datamodel.Element)
+
+        # jointTransforms is a parallel array to jointList (format_ver 0-20).
+        # Must be updated alongside jointList or studiomdl reads stale bone transforms.
+        if DmeModel.get("jointTransforms") is not None:
+            new_jt = []
+            if model_at_slot0:
+                model_trfm = DmeModel.get("transform")
+                if isinstance(model_trfm, datamodel.Element):
+                    new_jt.append(model_trfm)
+            new_jt.append(sp_trfm)
+            for dag in dag_entries:
+                dag_t = dag.get("transform")
+                if isinstance(dag_t, datamodel.Element):
+                    new_jt.append(dag_t)
+            DmeModel["jointTransforms"] = datamodel.make_array(new_jt, datamodel.Element)
 
         # Update baseStates rest-pose transforms
         bs = DmeModel.get("baseStates")

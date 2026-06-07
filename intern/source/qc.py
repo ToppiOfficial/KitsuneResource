@@ -1863,21 +1863,31 @@ class QCProcessor:
     def _write_skeleton_dmx(self, output_path: Path, bones_data: list,
                             dmx_format: str, dmx_format_ver: int,
                             encoding: str = "keyvalues2", encoding_ver: int = 1) -> None:
-        """Write a rest-pose skeleton DMX (ASCII keyvalues2) matching Blender/Source format.
+        """Write a rest-pose skeleton DMX matching the Blender/Source exporter conventions.
 
-        Uses DmeJoint elements. Each DmeTransform is shared between the joint hierarchy
-        and baseStates, so it serialises as a separate top-level element (matching what
-        Blender's DMX exporter produces). Blender and studiomdl both read baseStates as
-        the authoritative rest-pose transforms.
+        Follows the same format-version gates as Blender's Source Tools exporter:
+          format_ver >= 11  → jointList on DmeModel; DmeTimeFrame uses "duration" (Time type)
+          format_ver  > 11  → log layer times are Time; else int (1/10000 sec units)
+          format_ver 0–20   → jointTransforms on DmeModel (required by studiomdl ≤ model 20)
         """
-        dm   = datamodel.DataModel(dmx_format, dmx_format_ver)
+        fv = dmx_format_ver
+        want_jointlist       = fv >= 11
+        want_jointtransforms = 0 <= fv < 21
+        use_time_type        = fv > 11   # Time for log layers; int otherwise
+        use_time_duration    = fv >= 11  # "duration" attr; else "durationTime" (int)
+
+        dm   = datamodel.DataModel(dmx_format, fv)
         root = dm.add_element("root", elemtype="DmElement")
 
         # ---- skeleton hierarchy (baseStates is authoritative for studiomdl) ----------
         model = dm.add_element("skeleton", elemtype="DmeModel")
         root["skeleton"] = model
-        model["children"]  = datamodel.make_array([], datamodel.Element)
-        model["jointList"] = datamodel.make_array([], datamodel.Element)
+        model["children"] = datamodel.make_array([], datamodel.Element)
+
+        if want_jointlist:
+            model["jointList"] = datamodel.make_array([], datamodel.Element)
+        if want_jointtransforms:
+            model["jointTransforms"] = datamodel.make_array([], datamodel.Element)
 
         trfm_list = dm.add_element("base", elemtype="DmeTransformList")
         trfm_list["transforms"] = datamodel.make_array([], datamodel.Element)
@@ -1896,8 +1906,11 @@ class QCProcessor:
             joint["children"]  = datamodel.make_array([], datamodel.Element)
             joint_map[bone_name] = joint
 
-            trfm_list["transforms"].append(trfm)   # _users=2 → separate top-level element
-            model["jointList"].append(joint)        # _users=2 → separate top-level element
+            trfm_list["transforms"].append(trfm)
+            if want_jointlist:
+                model["jointList"].append(joint)
+            if want_jointtransforms:
+                model["jointTransforms"].append(trfm)
 
         for bone_name, parent_name, _loc, _rot in bones_data:
             joint = joint_map[bone_name]
@@ -1907,9 +1920,6 @@ class QCProcessor:
                 model["children"].append(joint)
 
         # ---- single-frame animationList (required by Blender's animation importer) ---
-        # Blender's Source Tools look for animationList to import pose data.
-        # toElement references the same DmeTransform used in the skeleton so the
-        # reader can resolve bone names via transform_id_map.
         anim_list = dm.add_element("", elemtype="DmeAnimationList")
         root["animationList"] = anim_list
 
@@ -1918,17 +1928,23 @@ class QCProcessor:
         anim_list["animations"] = datamodel.make_array([clip], datamodel.Element)
 
         time_frame = dm.add_element("timeframe", elemtype="DmeTimeFrame")
-        time_frame["duration"] = datamodel.Time(0.0)
-        time_frame["scale"]    = 1.0
+        if use_time_duration:
+            time_frame["duration"] = datamodel.Time(0.0)
+        else:
+            time_frame["durationTime"] = 0
+        time_frame["scale"]   = 1.0
         clip["timeFrame"]  = time_frame
         clip["frameRate"]  = 30
         clip["channels"]   = datamodel.make_array([], datamodel.Element)
+
+        time_val = datamodel.Time(0.0) if use_time_type else 0
+        time_type = datamodel.Time if use_time_type else int
 
         for bone_name, _, loc, rot in bones_data:
             trfm = trfm_map[bone_name]
 
             pos_layer = dm.add_element("Vector3 log", elemtype="DmeVector3LogLayer")
-            pos_layer["times"]  = datamodel.make_array([datamodel.Time(0.0)], datamodel.Time)
+            pos_layer["times"]  = datamodel.make_array([time_val], time_type)
             pos_layer["values"] = datamodel.make_array([datamodel.Vector3(list(loc))], datamodel.Vector3)
             pos_log = dm.add_element("Vector3 log", elemtype="DmeVector3Log")
             pos_log["layers"] = datamodel.make_array([pos_layer], datamodel.Element)
@@ -1940,7 +1956,7 @@ class QCProcessor:
             clip["channels"].append(pos_chan)
 
             ori_layer = dm.add_element("Quaternion log", elemtype="DmeQuaternionLogLayer")
-            ori_layer["times"]  = datamodel.make_array([datamodel.Time(0.0)], datamodel.Time)
+            ori_layer["times"]  = datamodel.make_array([time_val], time_type)
             ori_layer["values"] = datamodel.make_array([datamodel.Quaternion(list(rot))], datamodel.Quaternion)
             ori_log = dm.add_element("Quaternion log", elemtype="DmeQuaternionLog")
             ori_log["layers"] = datamodel.make_array([ori_layer], datamodel.Element)
