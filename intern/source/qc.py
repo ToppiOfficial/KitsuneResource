@@ -2656,7 +2656,9 @@ class QCProcessor:
                     restpose = block.get("restpose")
                     out_vrd = vrd_module.generate_vrd(
                         driver_bone, block["pose"], block["triggers"], block["target_bones"],
-                        pose_base, self.root_dir, vrd_name, self.current_scale, logger=self.logger,
+                        pose_base, self.root_dir, vrd_name,
+                        1.0 if self.compiler in ["studiomdl_v2"] else self.current_scale,
+                        logger=self.logger,
                         restpose_path=restpose[0] if restpose else None,
                         restpose_frame=restpose[1] if restpose else 0,
                         autotrigger=block.get("autotrigger"),
@@ -2730,7 +2732,8 @@ class QCProcessor:
                     out_vrd = vrd_module.generate_lookat_vrd(
                         target_bone, attachment_name, block["frame"], block["aimvector"], block["upvector"],
                         block["helper_bones"], block["pose"], pose_base, self.root_dir, vrd_name,
-                        self.current_scale, logger=self.logger,
+                        1.0 if self.compiler in ["studiomdl_v2"] else self.current_scale,
+                        logger=self.logger,
                         frame_cache=self._pose_frame_cache,
                         tracker=self.tracker,
                     )
@@ -2875,7 +2878,7 @@ class QCProcessor:
                         )
 
                 # Scaling
-                if self.current_scale != 1.0 and self.compiler != "nekomdl":
+                if self.current_scale != 1.0 and self.compiler not in ["nekomdl", "studiomdl_v2"]:
                     scaled_lines = []
                     for bl in block_content.splitlines(True):
                         btokens  = self._parse_command(bl.strip())
@@ -3395,7 +3398,7 @@ class QCProcessor:
                             new_bonemerge.add(bone)
                             existing_stripped.add(bone.split('.')[-1].lower())
 
-                    if self.current_scale != 1.0 and self.compiler != "nekomdl":
+                    if self.current_scale != 1.0 and self.compiler not in ["nekomdl", "studiomdl_v2"]:
                         try:
                             scaled_path = self._scale_vrd(vrd_file, self.current_scale)
                             orig_dir    = str(Path(vrd_raw).parent)
