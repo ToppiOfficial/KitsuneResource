@@ -1,10 +1,11 @@
 {
     "header": "ValveModel",
-    "studiomdl": "D:/Portable Program Files/kitsunemdl/studiomdl_v2.exe",
+    "studiomdl": "D:/Portable Program Files/nekomdl/nekomdl.exe",
     "gameinfo": "D:/Program Files/Steam/steamapps/common/Left 4 Dead 2/left4dead2/gameinfo.txt",
     "moddir": "D:/Program Files/Steam/steamapps/common/Left 4 Dead 2/left4dead2_workshop",
     "vtfcmd": "D:/Portable Program Files/vtfreloaded/VTFCmd.exe",
     "packager": "D:/Program Files/Steam/steamapps/common/Left 4 Dead 2/bin/vpk.exe",
+    "studiomdlflags": ["-cullanims", "-nodx80"],
     "definevariable": {
         "RigtoSurvivorAnim": "zoey",
         "animQCIpath": "../../../.modules/survivor_prefabs"

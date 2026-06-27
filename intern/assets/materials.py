@@ -4,6 +4,7 @@ from typing import Dict, List, Optional, Tuple
 
 from intern.formats.vpk import GameVPKCache
 from intern.utils import Logger, TEXTURE_KEYS
+from intern.assets.vmt_dxlevels import reorganize_vmt_by_dxlevel, strip_vmt_comments
 
 def find_material_vmt(material_name: str, search_paths: List[Path]) -> Optional[Path]:
     relative_vmt = Path("materials") / Path(material_name + ".vmt")
@@ -121,13 +122,97 @@ def parse_vmt_textures(vmt_path: Path, logger: Optional[Logger] = None) -> Dict[
     return structure["textures"]
 
 
+# Captures $key followed by a quoted value ("...") or an unquoted single token.
+_PATCH_KV_RE = re.compile(r'(\$\w+)\s+("(?:[^"\\]|\\.)*"|[^\s"{}\/\n]+)', re.IGNORECASE)
+# Matches a $key at the start of a line (leading whitespace allowed).
+_LINE_KV_RE = re.compile(r'(\s*)(\$\w+)\s+(.*)', re.IGNORECASE)
+
+
+def _parse_patch_all_kv(content: str) -> Tuple[dict, dict]:
+    """Extract all key-value pairs from a Patch VMT's replace and insert blocks."""
+    replace_kv: dict = {}
+    insert_kv: dict = {}
+
+    replace_m = re.search(r'replace\s*\{([^}]*)\}', content, re.IGNORECASE | re.DOTALL)
+    if replace_m:
+        for m in _PATCH_KV_RE.finditer(replace_m.group(1)):
+            replace_kv[m.group(1).lower()] = m.group(2)
+
+    insert_m = re.search(r'insert\s*\{([^}]*)\}', content, re.IGNORECASE | re.DOTALL)
+    if insert_m:
+        for m in _PATCH_KV_RE.finditer(insert_m.group(1)):
+            insert_kv[m.group(1).lower()] = m.group(2)
+
+    return replace_kv, insert_kv
+
+
+def _flatten_patch_content(base_content: str, replace_kv: dict, insert_kv: dict) -> str:
+    """
+    Apply Patch shader semantics to base VMT content and return the flattened string.
+
+    Source Engine semantics:
+    - replace: overwrites keys that ALREADY EXIST in the base; cannot add new keys.
+    - insert: overwrites OR adds any key (engine bug: insert acts like replace for existing keys).
+    """
+    lines = base_content.splitlines()
+    output_lines = []
+    applied_from_insert: set = set()
+
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("//"):
+            output_lines.append(line)
+            continue
+
+        m = _LINE_KV_RE.match(line)
+        if m:
+            leading, key = m.group(1), m.group(2).lower()
+            if key in insert_kv:
+                output_lines.append(f'{leading}{key} {insert_kv[key]}')
+                applied_from_insert.add(key)
+            elif key in replace_kv:
+                output_lines.append(f'{leading}{key} {replace_kv[key]}')
+            else:
+                output_lines.append(line)
+        else:
+            output_lines.append(line)
+
+    # Append insert-only keys that had no matching line in the base (new additions).
+    new_inserts = [(k, v) for k, v in insert_kv.items() if k not in applied_from_insert]
+    if new_inserts:
+        for i in range(len(output_lines) - 1, -1, -1):
+            if output_lines[i].strip() == "}":
+                new_lines = [f'\t{k} {v}' for k, v in new_inserts]
+                output_lines = output_lines[:i] + new_lines + output_lines[i:]
+                break
+
+    return '\n'.join(output_lines)
+
+
+def _parse_flat_textures(content: str) -> Dict[str, Path]:
+    """Extract texture key-value pairs from a flat (non-Patch) VMT content string."""
+    lowercase_keys = {k.lower() for k in TEXTURE_KEYS}
+    textures: Dict[str, Path] = {}
+    for line in content.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("//"):
+            continue
+        m = re.match(r'(\$\w+)\s+"([^"]+)"', stripped, re.IGNORECASE)
+        if m:
+            key, val = m.group(1).lower(), m.group(2)
+            if key in lowercase_keys:
+                textures[key] = Path(val.replace("\\", "/"))
+    return textures
+
+
 class MaterialCopyContext:
-    def __init__(self, export_dir: Path, search_paths: List[Path], localize_data: bool, logger: Optional[Logger], vpk_cache: Optional[GameVPKCache] = None):
+    def __init__(self, export_dir: Path, search_paths: List[Path], localize_data: bool, logger: Optional[Logger], vpk_cache: Optional[GameVPKCache] = None, vmt_patch_mode: int = 0):
         self.export_dir = export_dir
         self.search_paths = search_paths
         self.localize_data = localize_data
         self.logger = logger
         self.vpk_cache = vpk_cache
+        self.vmt_patch_mode = vmt_patch_mode
         
         self.copied_files: List[Path] = []
         self.processed_vmts: Dict[Path, Path] = {}
@@ -176,31 +261,101 @@ class VMTProcessor:
         if vmt_path in self.ctx.processed_vmts:
             self.ctx.logger and self.ctx.logger.debug(f"Skipping already processed VMT: {vmt_path}")
             return {}, self.ctx.processed_vmts[vmt_path]
-        
+
         if not vmt_path.exists():
             self.ctx.logger and self.ctx.logger.warn(f"Missing VMT: {vmt_path}")
             return {}, None
-        
+
         dest_vmt = dest_vmt or (self.ctx.export_dir / self.ctx.relative_to_materials_root(vmt_path))
         self.ctx.processed_vmts[vmt_path] = dest_vmt
-        
-        self._copy_vmt_file(vmt_path, dest_vmt)
+
         structure = parse_vmt_structure(vmt_path, self.ctx.logger)
-        
+
+        if structure["is_patch"] and self.ctx.vmt_patch_mode > 0 and structure.get("include_path"):
+            return self._process_patch_flatten(vmt_path, dest_vmt, structure, nosubfolder, copy_textures)
+
+        self._copy_vmt_file(vmt_path, dest_vmt)
+
         included_textures, included_vmt_dest = self._process_include(structure, dest_vmt, nosubfolder)
         final_textures = self._merge_textures(structure, included_textures)
-        
+
         if copy_textures:
             self._copy_referenced_textures(final_textures, dest_vmt, nosubfolder)
-        
+
         if self.ctx.localize_data:
             self._rewrite_vmt_paths(vmt_path, dest_vmt, structure, included_vmt_dest, final_textures)
-        
+
         return final_textures, dest_vmt
+
+    def _process_patch_flatten(self, vmt_path: Path, dest_vmt: Path, structure: dict,
+                               nosubfolder: bool, copy_textures: bool) -> Tuple[Dict[str, Path], Optional[Path]]:
+        patch_content = vmt_path.read_text(encoding="utf-8", errors="ignore")
+        replace_kv, insert_kv = _parse_patch_all_kv(patch_content)
+
+        # Locate the included base VMT
+        base_vmt_path: Optional[Path] = None
+        include_path = structure["include_path"]
+        for root in self.ctx.search_paths:
+            candidate = (root / include_path)
+            if not candidate.suffix:
+                candidate = candidate.with_suffix(".vmt")
+            if candidate.exists():
+                base_vmt_path = candidate
+                break
+
+        if base_vmt_path is None:
+            self.ctx.logger and self.ctx.logger.warn(
+                f"Patch flattening: included VMT not found ({include_path}), falling back to copy"
+            )
+            self._copy_vmt_file(vmt_path, dest_vmt)
+            included_textures, included_vmt_dest = self._process_include(structure, dest_vmt, nosubfolder)
+            final_textures = self._merge_textures(structure, included_textures)
+            if copy_textures:
+                self._copy_referenced_textures(final_textures, dest_vmt, nosubfolder)
+            if self.ctx.localize_data:
+                self._rewrite_vmt_paths(vmt_path, dest_vmt, structure, included_vmt_dest, final_textures)
+            return final_textures, dest_vmt
+
+        # Prevent the base VMT from being separately copied later.
+        self.ctx.processed_vmts.setdefault(base_vmt_path, None)
+
+        base_content = base_vmt_path.read_text(encoding="utf-8", errors="ignore")
+        flat_content = _flatten_patch_content(base_content, replace_kv, insert_kv)
+        mode = self.ctx.vmt_patch_mode
+        final_content = reorganize_vmt_by_dxlevel(
+            flat_content,
+            reorganize_dxlevel=(mode == 1),
+            clean_disabled_groups=(mode in (1, 2)),
+        )
+
+        dest_vmt.parent.mkdir(parents=True, exist_ok=True)
+        dest_vmt.write_text(final_content, encoding="utf-8")
+        self.ctx.copied_files.append(dest_vmt)
+        self.ctx.logger and self.ctx.logger.info(
+            f"Flattened Patch VMT: {dest_vmt.relative_to(self.ctx.export_dir)}"
+        )
+
+        flat_textures = _parse_flat_textures(final_content)
+
+        if copy_textures:
+            self._copy_referenced_textures(flat_textures, dest_vmt, nosubfolder)
+
+        if self.ctx.localize_data:
+            flat_structure = {
+                "is_patch": False,
+                "textures": flat_textures,
+                "replace_textures": {},
+                "insert_textures": {},
+            }
+            # Read from dest_vmt (the flattened file we just wrote) and rewrite in place.
+            self._rewrite_vmt_paths(dest_vmt, dest_vmt, flat_structure, None, flat_textures)
+
+        return flat_textures, dest_vmt
     
     def _copy_vmt_file(self, vmt_path: Path, dest_vmt: Path):
         dest_vmt.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(vmt_path, dest_vmt)
+        content = vmt_path.read_text(encoding="utf-8", errors="ignore")
+        dest_vmt.write_text(strip_vmt_comments(content), encoding="utf-8")
         self.ctx.copied_files.append(dest_vmt)
         self.ctx.logger and self.ctx.logger.info(f"Copied VMT: {dest_vmt.relative_to(self.ctx.export_dir)}")
     
@@ -345,14 +500,16 @@ def copy_materials(
     search_paths: List[Path],
     localize_data: bool = True,
     logger: Optional[Logger] = None,
-    vpk_cache: Optional[GameVPKCache] = None
+    vpk_cache: Optional[GameVPKCache] = None,
+    vmt_patch_mode: int = 0,
 ) -> List[Path]:
-    
+
     if not material_to_vmt:
         logger and logger.warn("No materials to copy.")
         return []
-    
-    ctx = MaterialCopyContext(export_dir, search_paths, localize_data, logger, vpk_cache=vpk_cache)
+
+    ctx = MaterialCopyContext(export_dir, search_paths, localize_data, logger,
+                              vpk_cache=vpk_cache, vmt_patch_mode=vmt_patch_mode)
     processor = VMTProcessor(ctx)
     
     for vmt_path in material_to_vmt.values():

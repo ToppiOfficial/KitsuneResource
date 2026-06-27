@@ -3,6 +3,26 @@ from pathlib import Path
 from intern.utils import Logger
 from intern.formats.mdl import get_model_companion_files
 
+_NATIVE_COMPILER_STEMS = {"studiomdl_v2", "kitsunemdl", "pulsemdl"}
+
+
+def _is_native_compiler(exe: Path) -> bool:
+    return exe.stem.lower() in _NATIVE_COMPILER_STEMS
+
+
+def _extract_output_from_stdout(stdout: str) -> Path | None:
+    if not stdout:
+        return None
+    for line in stdout.splitlines():
+        line = line.strip()
+        # Look for "writing <path>.mdl:"
+        if line.lower().startswith("writing ") and line.lower().endswith(".mdl:"):
+            path_str = line[8:-1].strip()
+            if path_str:
+                return Path(path_str)
+    return None
+
+
 def _extract_modelname(qc_file: Path) -> str | None:
     with qc_file.open("r", encoding="utf-8", errors="ignore") as f:
         for line in f:
@@ -36,7 +56,8 @@ def _ensure_model_output_dir(studiomdl_exe: Path, qc_file: Path, game_dir: Path 
 def model_compile_studiomdl(studiomdl_exe: str | Path, qc_file: str | Path, output_dir: str | Path = None,
                             game_dir: str | Path = None, vproject_dir: str | Path = None,
                             verbose: bool = False, logger: Logger = None,
-                            wine_prefix: list[str] = []) -> tuple[bool, list[Path]]:
+                            wine_prefix: list[str] = [],
+                            extra_args: list[str] = []) -> tuple[bool, list[Path]]:
     studiomdl_exe = Path(studiomdl_exe).resolve()
     qc_file = Path(qc_file).resolve()
     output_dir = Path(output_dir).resolve() if output_dir else None
@@ -55,6 +76,7 @@ def model_compile_studiomdl(studiomdl_exe: str | Path, qc_file: str | Path, outp
     cmd = wine_prefix + [str(studiomdl_exe), "-nop4", "-verbose"]
     if vproject_dir:
         cmd += ["-game", str(Path(vproject_dir).resolve())]
+    cmd += extra_args
     cmd.append(str(qc_file))
 
     log.info(f"studiomdl args: {' '.join(cmd[1:])}")
@@ -63,33 +85,35 @@ def model_compile_studiomdl(studiomdl_exe: str | Path, qc_file: str | Path, outp
     _ensure_model_output_dir(studiomdl_exe, qc_file, game_path, log)
 
     try:
-        result = subprocess.run(
+        with subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             text=True,
             errors="replace",
-            check=True
-        )
-        stdout = result.stdout or ""
+        ) as proc:
+            stdout_lines = []
+            for line in proc.stdout:
+                stdout_lines.append(line)
+                _log_compiler_output_to_console(line.rstrip("\r\n"), log, verbose)
+            proc.wait()
 
+        stdout = "".join(stdout_lines)
         log.write_raw_to_log(stdout, source="studiomdl")
-        _log_compiler_output_to_console(stdout, log, verbose)
 
-        mdl_path = _get_studiomdl_output_path(studiomdl_exe, qc_file, game_path)
+        if proc.returncode != 0:
+            log.error(f"Failed to compile {qc_file.name}")
+            return False, []
+
+        mdl_path = None
+        if _is_native_compiler(studiomdl_exe):
+            mdl_path = _extract_output_from_stdout(stdout)
+
+        if not mdl_path:
+            mdl_path = _get_studiomdl_output_path(studiomdl_exe, qc_file, game_path)
+
         moved_files = _move_compiled_files(mdl_path, output_dir, log)
         return True, moved_files
-
-    except subprocess.CalledProcessError as e:
-        log.error(f"Failed to compile {qc_file.name}")
-        
-        if e.stdout:
-            log.write_raw_to_log(e.stdout, source="studiomdl STDOUT")
-            _log_compiler_output_to_console(e.stdout, log, verbose)
-        if e.stderr:
-            log.write_raw_to_log(e.stderr, source="studiomdl STDERR")
-            _log_compiler_output_to_console(e.stderr, log, verbose, is_stderr=True)
-        return False, []
 
     except Exception as e:
         log.error(f"Unexpected exception compiling {qc_file.name}: {e}")

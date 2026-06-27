@@ -1,0 +1,133 @@
+{
+    "header": "ValveModel",
+    "studiomdl": "D:/Portable Program Files/pulsemdl/pulsemdl.exe",
+    "gameinfo": "D:/Program Files/Steam/steamapps/common/Left 4 Dead 2/left4dead2/gameinfo.txt",
+    "moddir": "D:/Program Files/Steam/steamapps/common/Left 4 Dead 2/left4dead2_workshop",
+    "vtfcmd": "D:/Portable Program Files/vtfreloaded/VTFCmd.exe",
+    "packager": "D:/Program Files/Steam/steamapps/common/Left 4 Dead 2/bin/vpk.exe",
+    "studiomdlflags": ["-vtxformat 0", "-cullanims", "-nodx80", "-cullmorphs"],
+    "includedirs": [
+        "D:/Development/game-mods/left4dead2/survivors/.modules/kitsunemdl/"
+    ],
+    "model": {
+        "Bill": { "qc": "main.qc",
+            "definevariable": { "survivorname": { "value": "bill" }, "survivorid": { "value": "survivors/survivor_namvet" }, "modeltype": { "value": "character" } },
+            "subdata": [
+                { "input": "scripts/addoninfo.txt", "output": "addoninfo.txt", "replace": { "$CHARA$": "Bill" } },
+                { "input": "gui/workshop_thumbnail.psd", "output": "addonimage.jpg" },
+                { "input": "gui/Lobby.psd", "output": "materials/vgui/select_bill.vtf", "vtf": { "flags": ["NOMIP", "NOLOD"], "encoder_args": ["-format", "DXT1", "-nomipmaps"] } },
+                { "input": "gui/ingame.psd", "output": "materials/vgui/s_panel_namvet.vtf", "vtf": { "flags": ["NOMIP", "NOLOD"], "encoder_args": ["-format", "DXT1", "-nomipmaps"] } },
+                { "input": "gui/incap.dds", "output": "materials/vgui/s_panel_namvet_incap.vtf", "vtf": { "flags": ["NOMIP", "NOLOD"], "encoder_args": ["-format", "DXT5", "-nomipmaps"] }}
+            ]
+        },
+        "Bill-fparms": { "qc": "main.qc", "parent": "Bill",
+            "definevariable": { "survivorname": { "value": "bill" }, "survivorid": { "value": "weapons/arms/v_arms_bill" }, "modeltype": { "value": "fparms" } }
+        },
+        "Bill-thepassing": { "qc": "main.qc", "parent": "Bill",
+            "definevariable": { "survivorname": { "value": "bill" }, "survivorid": { "value": "survivors/NamVet/namvet_deathpose" }, "modeltype": { "value": "thepassing" } }
+        },
+        "Francis": { "qc": "main.qc",
+            "definevariable": { "survivorname": { "value": "francis" }, "survivorid": { "value": "survivors/survivor_biker" }, "modeltype": { "value": "character" } },
+            "subdata": [
+                { "input": "scripts/addoninfo.txt", "output": "addoninfo.txt", "replace": { "$CHARA$": "Francis" } },
+                { "input": "gui/workshop_thumbnail.psd", "output": "addonimage.jpg" },
+                { "input": "gui/Lobby.psd", "output": "materials/vgui/select_francis.vtf", "vtf": { "flags": ["NOMIP", "NOLOD"], "encoder_args": ["-format", "DXT1", "-nomipmaps"] } },
+                { "input": "gui/ingame.psd", "output": "materials/vgui/s_panel_biker.vtf", "vtf": { "flags": ["NOMIP", "NOLOD"], "encoder_args": ["-format", "DXT1", "-nomipmaps"] } },
+                { "input": "gui/incap.dds", "output": "materials/vgui/s_panel_biker_incap.vtf", "vtf": { "flags": ["NOMIP", "NOLOD"], "encoder_args": ["-format", "DXT5", "-nomipmaps"] } }
+            ]
+        },
+        "Francis-fparms": { "qc": "main.qc", "parent": "Francis",
+            "definevariable": { "survivorname": { "value": "francis" }, "survivorid": { "value": "weapons/arms/v_arms_francis" }, "modeltype": { "value": "fparms" } }
+        },
+        "Francis-light": { "qc": "main.qc", "parent": "Francis",
+            "definevariable": { "survivorname": { "value": "francis" }, "survivorid": { "value": "survivors/survivor_biker_light" }, "modeltype": { "value": "characterlight" } }
+        },
+        "Louis": { "qc": "main.qc",
+            "definevariable": { "survivorname": { "value": "louis" }, "survivorid": { "value": "survivors/survivor_manager" }, "modeltype": { "value": "character" } },
+            "subdata": [
+                { "input": "scripts/addoninfo.txt", "output": "addoninfo.txt", "replace": { "$CHARA$": "Louis" } },
+                { "input": "gui/workshop_thumbnail.psd", "output": "addonimage.jpg" },
+                { "input": "gui/Lobby.psd", "output": "materials/vgui/select_louis.vtf", "vtf": { "flags": ["NOMIP", "NOLOD"], "encoder_args": ["-format", "DXT1", "-nomipmaps"] } },
+                { "input": "gui/ingame.psd", "output": "materials/vgui/s_panel_manager.vtf", "vtf": { "flags": ["NOMIP", "NOLOD"], "encoder_args": ["-format", "DXT1", "-nomipmaps"] } },
+                { "input": "gui/incap.dds", "output": "materials/vgui/s_panel_manager_incap.vtf", "vtf": { "flags": ["NOMIP", "NOLOD"], "encoder_args": ["-format", "DXT5", "-nomipmaps"] } }
+            ]
+        },
+        "Louis-fparms": { "qc": "main.qc", "parent": "Louis",
+            "definevariable": { "survivorname": { "value": "louis" }, "survivorid": { "value": "weapons/arms/v_arms_louis" }, "modeltype": { "value": "fparms" } }
+        },
+        "Zoey": { "qc": "main.qc",
+            "definevariable": { "survivorname": { "value": "zoey" }, "survivorid": { "value": "survivors/survivor_teenangst" }, "modeltype": { "value": "character" } },
+            "subdata": [
+                { "input": "scripts/addoninfo.txt", "output": "addoninfo.txt", "replace": { "$CHARA$": "Zoey" } },
+                { "input": "gui/workshop_thumbnail.psd", "output": "addonimage.jpg" },
+                { "input": "gui/Lobby.psd", "output": "materials/vgui/select_zoey.vtf", "vtf": { "flags": ["NOMIP", "NOLOD"], "encoder_args": ["-format", "DXT1", "-nomipmaps"] } },
+                { "input": "gui/ingame.psd", "output": "materials/vgui/s_panel_teenangst.vtf", "vtf": { "flags": ["NOMIP", "NOLOD"], "encoder_args": ["-format", "DXT1", "-nomipmaps"] } },
+                { "input": "gui/incap.dds", "output": "materials/vgui/s_panel_teenangst_incap.vtf", "vtf": { "flags": ["NOMIP", "NOLOD"], "encoder_args": ["-format", "DXT5", "-nomipmaps"] } }
+            ]
+        },
+        "Zoey-fparms": { "qc": "main.qc", "parent": "Zoey",
+            "definevariable": { "survivorname": { "value": "zoey" }, "survivorid": { "value": "weapons/arms/v_arms_zoey" }, "modeltype": { "value": "fparms" } }
+        },
+        "Zoey-light": { "qc": "main.qc", "parent": "Zoey",
+            "definevariable": { "survivorname": { "value": "zoey" }, "survivorid": { "value": "survivors/survivor_teenangst_light" }, "modeltype": { "value": "characterlight" } }
+        },
+        "Coach": { "qc": "main.qc",
+            "definevariable": { "survivorname": { "value": "coach" }, "survivorid": { "value": "survivors/survivor_coach" }, "modeltype": { "value": "character" } },
+            "subdata": [
+                { "input": "scripts/addoninfo.txt", "output": "addoninfo.txt", "replace": { "$CHARA$": "Coach" } },
+                { "input": "gui/workshop_thumbnail.psd", "output": "addonimage.jpg" },
+                { "input": "gui/Lobby.psd", "output": "materials/vgui/s_panel_lobby_coach.vtf", "vtf": { "flags": ["NOMIP", "NOLOD"], "encoder_args": ["-format", "DXT1", "-nomipmaps"] } },
+                { "input": "gui/ingame.psd", "output": "materials/vgui/s_panel_coach.vtf", "vtf": { "flags": ["NOMIP", "NOLOD"], "encoder_args": ["-format", "DXT1", "-nomipmaps"] } },
+                { "input": "gui/incap.dds", "output": "materials/vgui/s_panel_coach_incap.vtf", "vtf": { "flags": ["NOMIP", "NOLOD"], "encoder_args": ["-format", "DXT5", "-nomipmaps"] } }
+            ]
+        },
+        "Coach-fparms": { "qc": "main.qc", "parent": "Coach",
+            "definevariable": { "survivorname": { "value": "coach" }, "survivorid": { "value": "weapons/arms/v_arms_coach_new" }, "modeltype": { "value": "fparms" } }
+        },
+        "Ellis": { "qc": "main.qc",
+            "definevariable": { "survivorname": { "value": "ellis" }, "survivorid": { "value": "survivors/survivor_mechanic" }, "modeltype": { "value": "character" } },
+            "subdata": [
+                { "input": "scripts/addoninfo.txt", "output": "addoninfo.txt", "replace": { "$CHARA$": "Ellis" } },
+                { "input": "gui/workshop_thumbnail.psd", "output": "addonimage.jpg" },
+                { "input": "gui/Lobby.psd", "output": "materials/vgui/s_panel_lobby_mechanic.vtf", "vtf": { "flags": ["NOMIP", "NOLOD"], "encoder_args": ["-format", "DXT1", "-nomipmaps"] } },
+                { "input": "gui/ingame.psd", "output": "materials/vgui/s_panel_mechanic.vtf", "vtf": { "flags": ["NOMIP", "NOLOD"], "encoder_args": ["-format", "DXT1", "-nomipmaps"] } },
+                { "input": "gui/incap.dds", "output": "materials/vgui/s_panel_mechanic_incap.vtf", "vtf": { "flags": ["NOMIP", "NOLOD"], "encoder_args": ["-format", "DXT5", "-nomipmaps"] } }
+            ]
+        },
+        "Ellis-fparms": { "qc": "main.qc", "parent": "Ellis",
+            "definevariable": { "survivorname": { "value": "ellis" }, "survivorid": { "value": "weapons/arms/v_arms_mechanic_new" }, "modeltype": { "value": "fparms" } }
+        },
+        "Nick": { "qc": "main.qc",
+            "definevariable": { "survivorname": { "value": "nick" }, "survivorid": { "value": "survivors/survivor_gambler" }, "modeltype": { "value": "character" } },
+            "subdata": [
+                { "input": "scripts/addoninfo.txt", "output": "addoninfo.txt", "replace": { "$CHARA$": "Nick" } },
+                { "input": "gui/workshop_thumbnail.psd", "output": "addonimage.jpg" },
+                { "input": "gui/Lobby.psd", "output": "materials/vgui/s_panel_lobby_gambler.vtf", "vtf": { "flags": ["NOMIP", "NOLOD"], "encoder_args": ["-format", "DXT1", "-nomipmaps"] } },
+                { "input": "gui/ingame.psd", "output": "materials/vgui/s_panel_gambler.vtf", "vtf": { "flags": ["NOMIP", "NOLOD"], "encoder_args": ["-format", "DXT1", "-nomipmaps"] } },
+                { "input": "gui/incap.dds", "output": "materials/vgui/s_panel_gambler_incap.vtf", "vtf": { "flags": ["NOMIP", "NOLOD"], "encoder_args": ["-format", "DXT5", "-nomipmaps"] } }
+            ]
+        },
+        "Nick-fparms": { "qc": "main.qc", "parent": "Nick",
+            "definevariable": { "survivorname": { "value": "nick" }, "survivorid": { "value": "weapons/arms/v_arms_gambler_new" }, "modeltype": { "value": "fparms" } }
+        },
+        "Rochelle": { "qc": "main.qc",
+            "definevariable": { "survivorname": { "value": "rochelle" }, "survivorid": { "value": "survivors/survivor_producer" }, "modeltype": { "value": "character" } },
+            "subdata": [
+                { "input": "scripts/addoninfo.txt", "output": "addoninfo.txt", "replace": { "$CHARA$": "Rochelle" } },
+                { "input": "gui/workshop_thumbnail.psd", "output": "addonimage.jpg" },
+                { "input": "gui/Lobby.psd", "output": "materials/vgui/s_panel_lobby_producer.vtf", "vtf": { "flags": ["NOMIP", "NOLOD"], "encoder_args": ["-format", "DXT1", "-nomipmaps"] } },
+                { "input": "gui/ingame.psd", "output": "materials/vgui/s_panel_producer.vtf", "vtf": { "flags": ["NOMIP", "NOLOD"], "encoder_args": ["-format", "DXT1", "-nomipmaps"] } },
+                { "input": "gui/incap.dds", "output": "materials/vgui/s_panel_producer_incap.vtf", "vtf": { "flags": ["NOMIP", "NOLOD"], "encoder_args": ["-format", "DXT5", "-nomipmaps"] } }
+            ]
+        },
+        "Rochelle-fparms": { "qc": "main.qc", "parent": "Rochelle",
+            "definevariable": { "survivorname": { "value": "rochelle" }, "survivorid": { "value": "weapons/arms/v_arms_producer_new" }, "modeltype": { "value": "fparms" } }
+        }
+    },
+    "data": {
+        "SharedAssets": [
+            { "input": "scripts/addoninfo.txt","output": "addoninfo.txt", "replace": { "$CHARA$": "Shared Assets" } },
+            { "input": "gui/workshop_thumbnail.psd","output": "addonimage.jpg" }
+        ]
+    }
+}

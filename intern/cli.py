@@ -57,6 +57,10 @@ def _build_arg_parser() -> argparse.ArgumentParser:
                              help="Material mode: 0=skip, 1=raw-local, 2=shared (default).")
     model_group.add_argument("--no-mat-local", action="store_true",
                              help="Disable material localization.")
+    model_group.add_argument("--vmt-patch-mode", type=int, default=None, choices=[0, 1, 2, 3],
+                             help="VMT patch processing mode: 0=off (default), "
+                                  "1=flatten+dxlevel+clean, 2=flatten+clean, 3=flatten only. "
+                                  "Overrides 'vmtpatchmode' config key.")
     model_group.add_argument("--package-files", action="store_true",
                              help="Package each subfolder into VPK or GMA archive.")
     model_group.add_argument("--archive-old-ver", action="store_true",

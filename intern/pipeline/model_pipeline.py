@@ -15,6 +15,22 @@ from intern.source.cache_tracker import ProcessedAssetsTracker
 from .data_processor import DataProcessor
 
 
+_NATIVE_COMPILER_STEMS = {"studiomdl_v2", "kitsunemdl", "pulsemdl"}
+
+
+def _is_native_compiler(exe: Path) -> bool:
+    return exe.stem.lower() in _NATIVE_COMPILER_STEMS
+
+
+def _build_native_extra_args(include_dirs: list, variables: dict) -> list[str]:
+    args: list[str] = []
+    for d in (include_dirs or []):
+        args += ["-includedir", str(d)]
+    for name, value in (variables or {}).items():
+        args += ["-defvar", str(name), str(value)]
+    return args
+
+
 def _resolve_qc_path(raw: str) -> Optional[Path]:
     """Resolve a QC path from config, probing .qc then .qci when no extension is given."""
     p = Path(raw).resolve()
@@ -32,7 +48,8 @@ class ModelCompiler:
                  vtfcmd_exe: Optional[Path], gameinfo_dir: Optional[Path],
                  args, logger: Logger, global_includedirs: list = None,
                  moddir: Optional[Path] = None, vprojectdir: Optional[Path] = None,
-                 wine_prefix: list = None):
+                 wine_prefix: list = None, studiomdl_flags: list = None,
+                 vmt_patch_mode: int = 0):
         self.studiomdl_exe = studiomdl_exe
         self.search_paths = search_paths
         self.vtfcmd_exe = vtfcmd_exe
@@ -44,6 +61,8 @@ class ModelCompiler:
         self.moddir = moddir
         self.vprojectdir = vprojectdir
         self.wine_prefix = wine_prefix or []
+        self.studiomdl_flags = studiomdl_flags or []
+        self.vmt_patch_mode = vmt_patch_mode
 
     def _parse_model_defines(self, model_define_vars: dict) -> tuple[dict, dict]:
         regular_model_defines = {}
@@ -72,6 +91,12 @@ class ModelCompiler:
                             output_dir: Optional[Path], game_dir: Optional[Path],
                             logger: Logger, include_dirs: list = None,
                             tracker: ProcessedAssetsTracker = None):
+        if _is_native_compiler(self.studiomdl_exe):
+            return self._compile_single_qc_native(
+                qc_path, variables, output_dir, game_dir, logger, include_dirs,
+                extra_flags=self.studiomdl_flags,
+            )
+
         temp_qc, preprocess_errors = self._process_qc(
             qc_path, logger, base_name=base_name,
             variables=variables, include_dirs=include_dirs, tracker=tracker,
@@ -91,6 +116,7 @@ class ModelCompiler:
                     verbose=self.args.verbose,
                     logger=logger,
                     wine_prefix=self.wine_prefix,
+                    extra_args=self.studiomdl_flags,
                 )
         finally:
             if temp_qc.exists():
@@ -105,9 +131,30 @@ class ModelCompiler:
 
         return success, moved_files
 
+    def _compile_single_qc_native(self, qc_path: Path, variables: dict,
+                                   output_dir: Optional[Path], game_dir: Optional[Path],
+                                   logger: Logger, include_dirs: list = None,
+                                   extra_flags: list = None):
+        extra_args = (extra_flags or []) + _build_native_extra_args(include_dirs, variables)
+        logger.info(f"Native compiler: skipping QC preprocessing, passing raw QC")
+        success, moved_files = model_compile_studiomdl(
+            studiomdl_exe=self.studiomdl_exe,
+            qc_file=qc_path,
+            output_dir=output_dir,
+            game_dir=game_dir,
+            vproject_dir=(None if getattr(self.args, 'no_vproject', False)
+                          else (self.vprojectdir or game_dir)),
+            verbose=self.args.verbose,
+            logger=logger,
+            wine_prefix=self.wine_prefix,
+            extra_args=extra_args,
+        )
+        return success, moved_files
+
     def compile_model(self, model_name: str, model_data: dict, compile_root: Path,
                       global_vars: dict = None,
-                      tracker: ProcessedAssetsTracker = None) -> tuple[bool, list[Path], Optional[Path]]:
+                      tracker: ProcessedAssetsTracker = None,
+                      output_dir_override: Optional[Path] = None) -> tuple[bool, list[Path], Optional[Path]]:
         self.logger.info("")
         model_logger = self.logger.with_context("MODEL")
 
@@ -140,8 +187,11 @@ class ModelCompiler:
                 output_dir = None
             model_logger.info(f"Compiling model {qc_path.name} directly to game directory")
         else:
-            output_dir = (compile_root if getattr(self.args, 'single_addon', False)
-                          else compile_root / model_name)
+            if output_dir_override is not None:
+                output_dir = output_dir_override
+            else:
+                output_dir = (compile_root if getattr(self.args, 'single_addon', False)
+                              else compile_root / model_name)
             output_dir.mkdir(parents=True, exist_ok=True)
             model_logger.info(f"Compiling model {qc_path.name}")
 
@@ -319,6 +369,7 @@ class ModelCompiler:
             localize_data=localize,
             logger=mat_logger,
             vpk_cache=self._vpk_cache,
+            vmt_patch_mode=self.vmt_patch_mode,
         )
         mat_logger.info(f"Material copy complete ({len(copied_files)} files).")
 
@@ -336,7 +387,7 @@ class ModelCompiler:
 class MaterialSetCopier:
     @staticmethod
     def copy_set(set_name: str, set_data: dict, compile_root: Path,
-                 search_paths: List[Path], logger: Logger):
+                 search_paths: List[Path], logger: Logger, vmt_patch_mode: int = 0):
         mat_logger = logger.with_context("MATERIAL")
         vmt_list = set_data.get("materials", [])
 
@@ -355,6 +406,7 @@ class MaterialSetCopier:
             search_paths,
             localize_data=True,
             logger=mat_logger,
+            vmt_patch_mode=vmt_patch_mode,
         )
 
         mat_logger.info(f"Material-only copy complete ({len(copied_files)} files).")
@@ -478,6 +530,7 @@ class ValveModelPipeline:
         global_includedirs = self.config.get("includedirs", [])
         moddir_val = self.config.get("moddir")
         vprojectdir_val = self.config.get("vprojectdir")
+        studiomdl_flags = self.config.get("studiomdlflags", [])
         return ModelCompiler(
             tools.studiomdl_exe,
             tools.search_paths,
@@ -489,6 +542,8 @@ class ValveModelPipeline:
             moddir=Path(moddir_val).resolve() if moddir_val else None,
             vprojectdir=Path(vprojectdir_val).resolve() if vprojectdir_val else None,
             wine_prefix=tools.wine_prefix,
+            studiomdl_flags=studiomdl_flags,
+            vmt_patch_mode=self._resolve_vmt_patch_mode(),
         )
 
     # ── Process ──────────────────────────────────────────────────────────────
@@ -500,16 +555,37 @@ class ValveModelPipeline:
         results: list[tuple[list[Path], Optional[Path]]] = []
         tracker = ProcessedAssetsTracker()
 
-        for model_name, model_data in self.config.get("model", {}).items():
+        model_entries = self.config.get("model", {})
+        parent_map: dict[str, str] = {
+            name: data["parent"]
+            for name, data in model_entries.items()
+            if "parent" in data
+        }
+        parent_output_dirs: dict[str, Optional[Path]] = {}
+
+        for model_name, model_data in model_entries.items():
             self.logger.root.model_total += 1
             if only_filter and model_name.lower() not in only_filter:
                 continue
+
+            override_dir: Optional[Path] = None
+            parent_name = parent_map.get(model_name)
+            if parent_name:
+                if parent_name in parent_output_dirs:
+                    override_dir = parent_output_dirs[parent_name]
+                else:
+                    self.logger.warn(
+                        f"Model '{model_name}' has parent '{parent_name}' which has not been "
+                        f"compiled yet in this run; using its own output directory."
+                    )
+
             success, moved_files, output_dir = compiler.compile_model(
                 model_name, model_data, tools.compile_root, global_vars=global_define_vars,
-                tracker=tracker,
+                tracker=tracker, output_dir_override=override_dir,
             )
             if success:
                 self.logger.root.model_compiled += 1
+                parent_output_dirs[model_name] = output_dir
                 mdl_files = [f for f in moved_files if f.suffix.lower() == ".mdl"]
                 results.append((mdl_files, output_dir))
 
@@ -546,9 +622,18 @@ class ValveModelPipeline:
                         mdl_files, output_dir, tools.compile_root, mat_logger
                     )
 
+    def _resolve_vmt_patch_mode(self) -> int:
+        # CLI --vmt-patch-mode overrides the config key "vmtpatchmode".
+        cli_mode = getattr(self.args, 'vmt_patch_mode', None)
+        if cli_mode is not None:
+            return int(cli_mode)
+        return int(self.config.get("vmtpatchmode", 0))
+
     def _process_material_sets(self, compile_root: Path, search_paths: List[Path]):
+        mode = self._resolve_vmt_patch_mode()
         for set_name, set_data in self.config.get("material", {}).items():
-            MaterialSetCopier.copy_set(set_name, set_data, compile_root, search_paths, self.logger)
+            MaterialSetCopier.copy_set(set_name, set_data, compile_root, search_paths, self.logger,
+                                       vmt_patch_mode=mode)
 
     def _process_data_sections(self, compile_root: Path, vtfcmd_exe: Optional[Path],
                                wine_prefix: list = []):
